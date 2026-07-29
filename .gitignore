@@ -1,0 +1,42 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Node / React
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+## Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+
+## IDE
+.idea/
+.vscode/
+.rider/
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Docker
+docker-data/
+
+## Project specific
+*.secret.*
+
+## Plans
+Plans/
+
+## Bak
+*.bak
