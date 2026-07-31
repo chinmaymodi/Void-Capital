@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/VoidCapital.Api.Tests/VoidCapital.Api.Tests.csproj" />
+    <Project Path="src/VoidCapital.Api/VoidCapital.Api.csproj" />
+    <Project Path="src/VoidCapital.Core/VoidCapital.Core.csproj" />
+    <Project Path="src/VoidCapital.Infrastructure/VoidCapital.Infrastructure.csproj" />
+  </Folder>
+</Solution>

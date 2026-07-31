@@ -1,0 +1,6 @@
+@VoidCapital.Api_HostAddress = http://localhost:5189
+
+GET {{VoidCapital.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
