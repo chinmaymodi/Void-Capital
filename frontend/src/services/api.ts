@@ -4,16 +4,23 @@
 
 import axios from 'axios';
 import type {
+  AdminStatus,
   ApiResponse,
   Holding,
+  ModelPerformance,
+  PagedResolvedSignals,
+  PagedTrades,
   PnlSnapshot,
+  PortfolioComparison,
   PortfolioState,
   Settings,
+  Signal,
+  SignalBatchResult,
+  SquareOffResult,
   StockPrice,
   Trade,
-  TradeRequest,
   TradeFilters,
-  PagedTrades,
+  TradeRequest,
 } from '../types';
 
 const api = axios.create({
@@ -90,9 +97,9 @@ export function getStockHistory(symbol: string): Promise<StockPrice[]> {
   return unwrap(api.get<ApiResponse<StockPrice[]>>(`/market/${symbol}/history`));
 }
 
-export function getTrades(filters: TradeFilters = {}): Promise<PagedTrades> {
+export function getTrades(filters: TradeFilters = {}, userId: number = USER_ID): Promise<PagedTrades> {
   return unwrap(
-    api.get<ApiResponse<PagedTrades>>(`/trades/${USER_ID}`, {
+    api.get<ApiResponse<PagedTrades>>(`/trades/${userId}`, {
       params: {
         page: filters.page ?? 1,
         pageSize: filters.pageSize ?? 20,
@@ -119,6 +126,89 @@ export function updateSettings(settings: Settings): Promise<Settings> {
       watchlist: settings.watchlist,
     }),
   );
+}
+
+// ---------- Signals (D7.1) ----------
+
+export function getTodaySignals(userId: number = USER_ID): Promise<Signal[]> {
+  return unwrap(api.get<ApiResponse<Signal[]>>(`/signals/today/${userId}`));
+}
+
+export function approveSignal(signalId: number): Promise<Signal> {
+  return unwrap(api.post<ApiResponse<Signal>>(`/signals/${signalId}/approve`));
+}
+
+export function rejectSignal(signalId: number): Promise<Signal> {
+  return unwrap(api.post<ApiResponse<Signal>>(`/signals/${signalId}/reject`));
+}
+
+export function batchApproveSignals(ids: number[]): Promise<SignalBatchResult[]> {
+  return unwrap(api.post<ApiResponse<SignalBatchResult[]>>(`/signals/batch-approve`, { ids }));
+}
+
+export function batchRejectSignals(ids: number[]): Promise<SignalBatchResult[]> {
+  return unwrap(api.post<ApiResponse<SignalBatchResult[]>>(`/signals/batch-reject`, { ids }));
+}
+
+// ---------- Performance (D7.3) ----------
+
+export function getModelPerformance(): Promise<ModelPerformance[]> {
+  return unwrap(api.get<ApiResponse<ModelPerformance[]>>(`/performance/models`));
+}
+
+export function getResolvedSignals(
+  filters: { userId?: number; model?: string; page?: number; pageSize?: number } = {},
+): Promise<PagedResolvedSignals> {
+  return unwrap(
+    api.get<ApiResponse<PagedResolvedSignals>>(`/performance/signals`, {
+      params: {
+        userId: filters.userId || undefined,
+        model: filters.model || undefined,
+        page: filters.page ?? 1,
+        pageSize: filters.pageSize ?? 20,
+      },
+    }),
+  );
+}
+
+export function getComparison(): Promise<PortfolioComparison> {
+  return unwrap(api.get<ApiResponse<PortfolioComparison>>(`/performance/compare`));
+}
+
+// ---------- Admin (D7.2) ----------
+
+export function getAdminStatus(): Promise<AdminStatus> {
+  return unwrap(api.get<ApiResponse<AdminStatus>>(`/admin/status`));
+}
+
+export function getAdminSettings(userId: number): Promise<Settings> {
+  return unwrap(api.get<ApiResponse<Settings>>(`/admin/settings/${userId}`));
+}
+
+export function updateAdminSettings(userId: number, settings: Settings): Promise<Settings> {
+  return unwrap(
+    api.put<ApiResponse<Settings>>(`/admin/settings/${userId}`, {
+      autoExecute: settings.autoExecute,
+      minConfidence: settings.minConfidence,
+      negativeLimit: settings.negativeLimit,
+      interestRate: settings.interestRate,
+      watchlist: settings.watchlist,
+    }),
+  );
+}
+
+export function updateGlobalSettings(minConfidence: number, watchlist: string[]): Promise<Settings[]> {
+  return unwrap(
+    api.put<ApiResponse<Settings[]>>(`/admin/settings/global`, { minConfidence, watchlist }),
+  );
+}
+
+export function squareOff(userId: number): Promise<SquareOffResult> {
+  return unwrap(api.post<ApiResponse<SquareOffResult>>(`/admin/square-off/${userId}`));
+}
+
+export function runSignalGeneration(): Promise<string> {
+  return unwrap(api.post<ApiResponse<string>>(`/admin/run-signals`));
 }
 
 export default api;

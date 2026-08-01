@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
+using VoidCapital.Api.Modules.Portfolio;
+using VoidCapital.Api.Modules.Portfolio.DTOs;
 using VoidCapital.Api.Modules.Signals;
 using VoidCapital.Api.Modules.Signals.DTOs;
 using VoidCapital.Api.Modules.Signals.Models;
@@ -13,11 +15,25 @@ public class AdminController : ControllerBase
 {
     private readonly ISignalRepository _signalRepo;
     private readonly ISignalPerformanceRepository _performanceRepo;
+    private readonly ISettingsRepository _settingsRepo;
+    private readonly IUserRepository _userRepo;
+    private readonly IHoldingRepository _holdingRepo;
+    private readonly IPortfolioService _portfolioService;
 
-    public AdminController(ISignalRepository signalRepo, ISignalPerformanceRepository performanceRepo)
+    public AdminController(
+        ISignalRepository signalRepo,
+        ISignalPerformanceRepository performanceRepo,
+        ISettingsRepository settingsRepo,
+        IUserRepository userRepo,
+        IHoldingRepository holdingRepo,
+        IPortfolioService portfolioService)
     {
         _signalRepo = signalRepo;
         _performanceRepo = performanceRepo;
+        _settingsRepo = settingsRepo;
+        _userRepo = userRepo;
+        _holdingRepo = holdingRepo;
+        _portfolioService = portfolioService;
     }
 
     /// <summary>
@@ -68,5 +84,141 @@ public class AdminController : ControllerBase
         }
 
         return Ok(ApiResponse<IEnumerable<SignalDto>>.Ok(results));
+    }
+
+    /// <summary>Read one user's settings row (used for system-user config).</summary>
+    [HttpGet("settings/{userId:int}")]
+    public async Task<ActionResult<ApiResponse<SettingsDto>>> GetSettings(int userId)
+    {
+        var settings = await _settingsRepo.GetByUserIdAsync(userId)
+            ?? throw new NotFoundException($"Settings for user {userId} were not found.");
+
+        return Ok(ApiResponse<SettingsDto>.Ok(SettingsMapper.ToDto(settings)));
+    }
+
+    /// <summary>
+    /// Update a user's settings (negative limit, interest rate, auto-execute,
+    /// min confidence, watchlist). Same contract as the user-facing settings
+    /// endpoint, exposed for admin control of system portfolios.
+    /// </summary>
+    [HttpPut("settings/{userId:int}")]
+    public async Task<ActionResult<ApiResponse<SettingsDto>>> UpdateSettings(
+        int userId, [FromBody] UpdateSettingsRequest request)
+    {
+        var settings = await _settingsRepo.GetByUserIdAsync(userId)
+            ?? throw new NotFoundException($"Settings for user {userId} were not found.");
+
+        settings.AutoExecute = request.AutoExecute;
+        settings.MinConfidence = request.MinConfidence;
+        settings.NegativeLimit = request.NegativeLimit;
+        settings.InterestRate = request.InterestRate;
+        settings.Watchlist = SettingsMapper.SerializeWatchlist(request.Watchlist);
+
+        await _settingsRepo.UpdateAsync(settings);
+        return Ok(ApiResponse<SettingsDto>.Ok(SettingsMapper.ToDto(settings)));
+    }
+
+    /// <summary>
+    /// Apply global configuration (min confidence + default watchlist) to every
+    /// user's settings row. There is no dedicated global-config table; the
+    /// settings table is the single source of truth.
+    /// </summary>
+    [HttpPut("settings/global")]
+    public async Task<ActionResult<ApiResponse<IEnumerable<SettingsDto>>>> UpdateGlobalSettings(
+        [FromBody] GlobalSettingsRequest request)
+    {
+        var all = (await _settingsRepo.GetAllAsync()).ToList();
+        foreach (var settings in all)
+        {
+            settings.MinConfidence = request.MinConfidence;
+            settings.Watchlist = SettingsMapper.SerializeWatchlist(request.Watchlist);
+        }
+
+        foreach (var settings in all)
+            await _settingsRepo.UpdateAsync(settings);
+
+        var dtos = all.Select(SettingsMapper.ToDto).ToList();
+        return Ok(ApiResponse<IEnumerable<SettingsDto>>.Ok(dtos));
+    }
+
+    /// <summary>
+    /// Manual margin call: sell every holding of the user at market price, then
+    /// repay any outstanding credit balance. If proceeds do not cover the
+    /// debt, the residual is written off (cash floors at zero).
+    /// </summary>
+    [HttpPost("square-off/{userId:int}")]
+    public async Task<ActionResult<ApiResponse<SquareOffResultDto>>> SquareOff(int userId)
+    {
+        var user = await _userRepo.GetByIdAsync(userId)
+            ?? throw new NotFoundException($"User with id {userId} was not found.");
+        _ = user; // validated above; the sell loop below mutates via the service.
+
+        var holdings = await _holdingRepo.GetByUserIdAsync(userId);
+        var positionsSold = 0;
+        var proceeds = 0m;
+
+        foreach (var holding in holdings)
+        {
+            var trade = await _portfolioService.ExecuteSellAsync(userId, holding.Symbol, holding.Quantity);
+            positionsSold++;
+            proceeds += trade.TotalValue;
+        }
+
+        // ExecuteSellAsync already credited proceeds to cash; re-read the
+        // balance and absorb any residual debt (cash floors at zero).
+        var afterLiquidation = await _userRepo.GetByIdAsync(userId);
+        var remainingCash = afterLiquidation?.CurrentCash ?? 0m;
+        if (remainingCash < 0)
+        {
+            await _userRepo.UpdateCashAsync(userId, 0);
+            remainingCash = 0;
+        }
+
+        var result = new SquareOffResultDto(userId, positionsSold, proceeds, remainingCash);
+        return Ok(ApiResponse<SquareOffResultDto>.Ok(result));
+    }
+
+    /// <summary>
+    /// Overall system status: pending signal count plus a per-user balance
+    /// report (cash, total value, return vs starting budget).
+    /// </summary>
+    [HttpGet("status")]
+    public async Task<ActionResult<ApiResponse<AdminStatusDto>>> GetStatus()
+    {
+        var users = await _userRepo.GetAllAsync();
+        var counts = await _signalRepo.GetStatusCountsAsync();
+
+        var balances = new List<UserBalanceDto>();
+        foreach (var user in users)
+        {
+            var state = await _portfolioService.GetPortfolioStateAsync(user.Id);
+            var totalReturn = state.TotalValue - user.StartingBudget;
+
+            balances.Add(new UserBalanceDto(
+                user.Id,
+                user.Name,
+                state.Cash,
+                state.TotalValue,
+                totalReturn,
+                user.StartingBudget > 0 ? totalReturn / user.StartingBudget : 0m));
+        }
+
+        var status = new AdminStatusDto(
+            DateTime.UtcNow,
+            counts.GetValueOrDefault(SignalStatus.PENDING),
+            balances);
+
+        return Ok(ApiResponse<AdminStatusDto>.Ok(status));
+    }
+
+    /// <summary>
+    /// Triggers signal generation. Stub until the Python pipeline bridge (D9)
+    /// is implemented; returns a message so the admin UI can show a result.
+    /// </summary>
+    [HttpPost("run-signals")]
+    public ActionResult<ApiResponse<string>> RunSignals()
+    {
+        var message = "Signal generation is not yet wired up (scheduled for D9).";
+        return Ok(ApiResponse<string>.Ok(message));
     }
 }

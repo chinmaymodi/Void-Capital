@@ -19,6 +19,14 @@ public class UserRepository : IUserRepository
         return await db.Users.FindAsync(id);
     }
 
+    public async Task<IEnumerable<User>> GetAllAsync()
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        return await db.Users
+            .OrderBy(u => u.Id)
+            .ToListAsync();
+    }
+
     public async Task<int> UpdateCashAsync(int userId, decimal newCash)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();

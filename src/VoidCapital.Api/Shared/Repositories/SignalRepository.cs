@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using VoidCapital.Api.Data;
 using VoidCapital.Api.Modules.Signals;
+using VoidCapital.Api.Modules.Signals.DTOs;
 using VoidCapital.Api.Modules.Signals.Models;
 
 namespace VoidCapital.Api.Shared.Repositories;
@@ -56,5 +57,94 @@ public class SignalRepository : ISignalRepository
         tracked.Status = signal.Status;
         tracked.FailureReason = signal.FailureReason;
         await db.SaveChangesAsync();
+    }
+
+    public async Task<IEnumerable<ModelPerformanceDto>> GetModelPerformanceAsync()
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+
+        // Materialize only the columns we aggregate over; grouping happens in
+        // memory because the ratio/percent math is clearer in C# than in SQL.
+        var rows = await db.SignalPerformances
+            .Where(p => p.Signal != null)
+            .Select(p => new { p.Signal!.ModelName, p.Outcome, p.ActualReturn })
+            .ToListAsync();
+
+        return rows
+            .GroupBy(r => r.ModelName)
+            .Select(g =>
+            {
+                var resolved = g.Where(r => r.Outcome is not null and not "PENDING").ToList();
+                var returns = resolved.Where(r => r.ActualReturn.HasValue).Select(r => r.ActualReturn!.Value).ToList();
+                var hitTarget = resolved.Count(r => r.Outcome == "HIT_TARGET");
+
+                return new ModelPerformanceDto(
+                    g.Key,
+                    g.Count(),
+                    resolved.Count,
+                    hitTarget,
+                    resolved.Count > 0 ? (decimal)hitTarget / resolved.Count : 0m,
+                    returns.Count > 0 ? returns.Average() : 0m,
+                    returns.Count > 0 ? returns.Max() : null,
+                    returns.Count > 0 ? returns.Min() : null);
+            })
+            .OrderByDescending(m => m.WinRate)
+            .ToList();
+    }
+
+    public async Task<(IEnumerable<ResolvedSignalDto> Items, int Total)> GetResolvedAsync(PerformanceQuery query)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+
+        var filtered = db.SignalPerformances
+            .Where(p => p.Signal != null && p.Outcome != null && p.Outcome != "PENDING");
+
+        if (query.UserId.HasValue)
+            filtered = filtered.Where(p => p.Signal!.UserId == query.UserId.Value);
+
+        if (!string.IsNullOrWhiteSpace(query.Model))
+            filtered = filtered.Where(p => p.Signal!.ModelName == query.Model);
+
+        var total = await filtered.CountAsync();
+
+        var page = Math.Max(query.Page, 1);
+        var pageSize = Math.Clamp(query.PageSize, 1, 100);
+        var items = await filtered
+            .OrderByDescending(p => p.ResolvedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(p => new ResolvedSignalDto(
+                p.SignalId,
+                p.Signal!.Date,
+                p.Signal.Symbol,
+                p.Signal.Action,
+                p.Signal.ModelName,
+                p.EntryPrice,
+                p.TargetPrice,
+                p.ExitPrice,
+                p.Outcome!,
+                p.ActualReturn,
+                p.ResolvedAt,
+                p.EvaluationDays))
+            .ToListAsync();
+
+        return (items, total);
+    }
+
+    public async Task<Dictionary<SignalStatus, int>> GetStatusCountsAsync()
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+
+        var counts = await db.Signals
+            .GroupBy(s => s.Status)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Status, x => x.Count);
+
+        // Ensure every status is present so callers can rely on TryGetValue
+        // without a fallback.
+        foreach (var status in Enum.GetValues<SignalStatus>())
+            counts.TryAdd(status, 0);
+
+        return counts;
     }
 }

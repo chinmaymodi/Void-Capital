@@ -26,7 +26,8 @@ public class SignalsControllerTests
         SuggestedQuantity: 10,
         EntryPrice: 2860m,
         TargetPrice: 3000m,
-        StopLoss: 2700m);
+        StopLoss: 2700m,
+        FailureReason: null);
 
     [Fact]
     public async Task GetToday_ReturnsSignalsForUser()

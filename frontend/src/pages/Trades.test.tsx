@@ -1,7 +1,7 @@
 // Trades page tests: table rendering, filter application, pagination,
 // page-size change, and CSV export. The service layer is mocked.
 
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Trades from '../pages/Trades';

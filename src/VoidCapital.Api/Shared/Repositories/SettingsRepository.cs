@@ -21,6 +21,14 @@ public class SettingsRepository : ISettingsRepository
             .FirstOrDefaultAsync();
     }
 
+    public async Task<IEnumerable<UserSettings>> GetAllAsync()
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        return await db.UserSettings
+            .OrderBy(s => s.UserId)
+            .ToListAsync();
+    }
+
     public async Task UpdateAsync(UserSettings settings)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();

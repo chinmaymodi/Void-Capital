@@ -17,7 +17,8 @@ public record SignalDto(
     int? SuggestedQuantity,
     decimal? EntryPrice,
     decimal? TargetPrice,
-    decimal? StopLoss)
+    decimal? StopLoss,
+    string? FailureReason)
 {
     public static SignalDto From(Signal signal) => new(
         signal.Id,
@@ -31,5 +32,6 @@ public record SignalDto(
         signal.SuggestedQuantity,
         signal.Performance?.EntryPrice,
         signal.Performance?.TargetPrice,
-        signal.Performance?.StopLoss);
+        signal.Performance?.StopLoss,
+        signal.FailureReason);
 }
