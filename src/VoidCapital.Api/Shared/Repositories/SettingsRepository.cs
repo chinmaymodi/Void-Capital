@@ -20,4 +20,11 @@ public class SettingsRepository : ISettingsRepository
             .Where(s => s.UserId == userId)
             .FirstOrDefaultAsync();
     }
+
+    public async Task UpdateAsync(UserSettings settings)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        db.UserSettings.Update(settings);
+        await db.SaveChangesAsync();
+    }
 }

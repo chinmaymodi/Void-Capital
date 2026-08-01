@@ -50,6 +50,8 @@ public class ExceptionMiddleware
         }
     }
 
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
     private static async Task WriteErrorAsync(HttpContext context, string error, string? message)
     {
         context.Response.ContentType = "application/json";
@@ -57,6 +59,8 @@ public class ExceptionMiddleware
             string.IsNullOrWhiteSpace(message) ? error : $"{error}: {message}",
             context.TraceIdentifier);
 
-        await context.Response.WriteAsync(JsonSerializer.Serialize(response));
+        // Use web defaults (camelCase) so the error envelope matches the
+        // success envelope produced by MVC's JsonSerializerOptions.
+        await context.Response.WriteAsync(JsonSerializer.Serialize(response, JsonOptions));
     }
 }

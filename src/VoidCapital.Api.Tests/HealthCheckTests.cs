@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using VoidCapital.Api.Shared;
 
 namespace VoidCapital.Api.Tests;
 
@@ -84,5 +85,3 @@ public class HealthCheckTests : IClassFixture<WebApplicationFactory<Program>>
 public sealed record HealthResponse(string Status);
 
 public sealed record SystemInfoResponse(string Name, string Version, string Environment);
-
-public sealed record ApiResponse<T>(bool Success, T? Data, string? Error, string? TraceId);

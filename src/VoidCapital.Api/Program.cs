@@ -5,6 +5,7 @@ using VoidCapital.Api.Data;
 using VoidCapital.Api.Middleware;
 using VoidCapital.Api.Modules.MarketData;
 using VoidCapital.Api.Modules.Portfolio;
+using VoidCapital.Api.Modules.Signals.Services;
 using VoidCapital.Api.Shared.Repositories;
 
 Log.Logger = new LoggerConfiguration()
@@ -55,10 +56,14 @@ try
     builder.Services.AddScoped<IPnlRepository, PnlRepository>();
     builder.Services.AddScoped<ISettingsRepository, SettingsRepository>();
     builder.Services.AddScoped<IMarketDataRepository, MarketDataRepository>();
+    builder.Services.AddScoped<ISignalRepository, SignalRepository>();
+    builder.Services.AddScoped<ISignalPerformanceRepository, SignalPerformanceRepository>();
 
     // Services
     builder.Services.AddScoped<IPortfolioService, PortfolioService>();
     builder.Services.AddScoped<IMarketDataService, MarketDataService>();
+    builder.Services.AddScoped<ISignalService, SignalService>();
+    builder.Services.AddScoped<SignalPerformanceService>();
 
     var app = builder.Build();
 
