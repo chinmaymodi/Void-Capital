@@ -1,6 +1,0 @@
-# Void Capital Python ETL pipeline dependencies (D2)
-yfinance
-pandas
-sqlalchemy
-psycopg2-binary
-python-dotenv
