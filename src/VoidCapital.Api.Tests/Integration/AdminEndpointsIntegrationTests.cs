@@ -11,7 +11,8 @@ namespace VoidCapital.Api.Tests.Integration;
 /// <summary>
 /// Admin endpoints against real PostgreSQL: per-user settings round-trip,
 /// global settings propagation, square-off liquidation, status report, and
-/// the run-signals stub. Each test creates its own user(s) for isolation.
+/// the run-signals integration facade. Each test creates its own user(s)
+/// for isolation.
 /// </summary>
 [Collection("integration")]
 public class AdminEndpointsIntegrationTests : IDisposable
@@ -43,6 +44,7 @@ public class AdminEndpointsIntegrationTests : IDisposable
             DELETE FROM portfolio.trade_log WHERE user_id = {0};
             DELETE FROM portfolio.holdings WHERE user_id = {0};
             DELETE FROM portfolio.pnl_snapshots WHERE user_id = {0};
+            DELETE FROM portfolio.watchlist WHERE user_id = {0};
             DELETE FROM identity.settings WHERE user_id = {0};
             DELETE FROM identity.users WHERE id = {0};
             """, userId);
@@ -232,14 +234,14 @@ public class AdminEndpointsIntegrationTests : IDisposable
         balance.TotalReturn.Should().Be(0m);
     }
 
-    // ---------- Run signals stub ----------
+    // ---------- Run signals (D9 real implementation) ----------
 
     [Fact]
-    public async Task RunSignals_ReturnsD9StubMessage()
+    public async Task RunSignals_ReturnsPerUserSummary()
     {
         var response = await _client.PostAsync("/api/v1/admin/run-signals", null);
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var envelope = await response.Content.ReadFromJsonAsync<TestEnvelope<string>>();
-        envelope!.Data.Should().Contain("D9");
+        envelope!.Data.Should().Contain("0 failures");
     }
 }

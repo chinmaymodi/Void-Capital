@@ -21,6 +21,8 @@ public class AppDbContext : DbContext
     public DbSet<Holding> Holdings => Set<Holding>();
     public DbSet<Trade> Trades => Set<Trade>();
     public DbSet<PnlSnapshot> PnlSnapshots => Set<PnlSnapshot>();
+    public DbSet<WatchlistItem> Watchlist => Set<WatchlistItem>();
+    public DbSet<CycleRun> CycleRuns => Set<CycleRun>();
     public DbSet<StockPrice> StockPrices => Set<StockPrice>();
     public DbSet<Signal> Signals => Set<Signal>();
     public DbSet<SignalPerformance> SignalPerformances => Set<SignalPerformance>();
@@ -95,6 +97,30 @@ public class AppDbContext : DbContext
             entity.Property(p => p.PortfolioValue).HasColumnName("portfolio_value");
             entity.Property(p => p.CashValue).HasColumnName("cash_value");
             entity.Property(p => p.HoldingsValue).HasColumnName("holdings_value");
+        });
+
+        modelBuilder.Entity<WatchlistItem>(entity =>
+        {
+            entity.ToTable("watchlist", "portfolio");
+            entity.HasKey(w => w.Id);
+            entity.Property(w => w.Id).HasColumnName("id");
+            entity.Property(w => w.UserId).HasColumnName("user_id");
+            entity.Property(w => w.Symbol).HasColumnName("symbol");
+            entity.Property(w => w.AddedDate).HasColumnName("added_date");
+        });
+
+        modelBuilder.Entity<CycleRun>(entity =>
+        {
+            entity.ToTable("cycle_runs", "ops");
+            entity.HasKey(r => r.Id);
+            entity.Property(r => r.Id).HasColumnName("id");
+            entity.Property(r => r.StartedAt).HasColumnName("started_at");
+            entity.Property(r => r.FinishedAt).HasColumnName("finished_at");
+            entity.Property(r => r.Status).HasColumnName("status");
+            entity.Property(r => r.Error).HasColumnName("error");
+            entity.Property(r => r.SignalsGenerated).HasColumnName("signals_generated");
+            entity.Property(r => r.SignalsExecuted).HasColumnName("signals_executed");
+            entity.Property(r => r.UsersProcessed).HasColumnName("users_processed");
         });
 
         // market_data.stocks has a composite PK (symbol, date) -- read-only

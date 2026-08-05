@@ -11,6 +11,7 @@ import {
   batchRejectSignals,
   getTodaySignals,
   rejectSignal,
+  runSignalGeneration,
 } from '../services/api';
 import type { Signal, SignalBatchResult, SignalStatus } from '../types';
 
@@ -36,7 +37,21 @@ export function Signals() {
   const [batchBusy, setBatchBusy] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const { showError, showSuccess } = useToast();
+  const [running, setRunning] = useState(false);
   const pausedRef = useRef(false);
+
+  const handleRunSignals = async () => {
+    setRunning(true);
+    try {
+      const message = await runSignalGeneration();
+      showSuccess(message);
+      fetchData();
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Failed to run signal generation');
+    } finally {
+      setRunning(false);
+    }
+  };
 
   const fetchData = useCallback(() => {
     setLoading(true);
@@ -165,6 +180,9 @@ export function Signals() {
           )}
           <button type="button" className="btn" onClick={fetchData} data-testid="refresh-signals">
             Refresh
+          </button>
+          <button type="button" className="btn btn-primary" onClick={handleRunSignals} disabled={running} data-testid="run-signals">
+            {running ? 'Running...' : 'Run Signal Generation'}
           </button>
         </div>
       </div>

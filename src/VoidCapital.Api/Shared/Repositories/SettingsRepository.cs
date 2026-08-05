@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using VoidCapital.Api.Data;
 using VoidCapital.Api.Modules.Portfolio.Models;
@@ -33,6 +34,30 @@ public class SettingsRepository : ISettingsRepository
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
         db.UserSettings.Update(settings);
+        
+        // Sync portfolio.watchlist
+        var watchlist = JsonSerializer.Deserialize<List<string>>(settings.Watchlist) ?? new();
+        var existing = await db.Watchlist.Where(w => w.UserId == settings.UserId).ToListAsync();
+        
+        // Remove symbols not in new watchlist
+        var toRemove = existing.Where(w => !watchlist.Contains(w.Symbol)).ToList();
+        db.Watchlist.RemoveRange(toRemove);
+        
+        // Add new symbols
+        var existingSymbols = existing.Select(w => w.Symbol).ToHashSet();
+        foreach (var symbol in watchlist)
+        {
+            if (!existingSymbols.Contains(symbol))
+            {
+                db.Watchlist.Add(new WatchlistItem 
+                { 
+                    UserId = settings.UserId, 
+                    Symbol = symbol, 
+                    AddedDate = DateOnly.FromDateTime(DateTime.UtcNow) 
+                });
+            }
+        }
+        
         await db.SaveChangesAsync();
     }
 }

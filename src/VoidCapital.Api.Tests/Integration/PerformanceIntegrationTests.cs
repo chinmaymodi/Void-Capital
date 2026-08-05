@@ -44,6 +44,7 @@ public class PerformanceIntegrationTests : IDisposable
             DELETE FROM portfolio.trade_log WHERE user_id = {0};
             DELETE FROM portfolio.holdings WHERE user_id = {0};
             DELETE FROM portfolio.pnl_snapshots WHERE user_id = {0};
+            DELETE FROM portfolio.watchlist WHERE user_id = {0};
             DELETE FROM identity.settings WHERE user_id = {0};
             DELETE FROM identity.users WHERE id = {0};
             """, userId);

@@ -4,6 +4,8 @@ using VoidCapital.Api.Modules.Portfolio.DTOs;
 using VoidCapital.Api.Modules.Signals;
 using VoidCapital.Api.Modules.Signals.DTOs;
 using VoidCapital.Api.Modules.Signals.Models;
+using VoidCapital.Api.Modules.Signals.Services;
+using VoidCapital.Api.Services;
 using VoidCapital.Api.Shared;
 using VoidCapital.Api.Shared.Repositories;
 
@@ -19,6 +21,7 @@ public class AdminController : ControllerBase
     private readonly IUserRepository _userRepo;
     private readonly IHoldingRepository _holdingRepo;
     private readonly IPortfolioService _portfolioService;
+    private readonly ISignalIntegrationService _signalIntegration;
 
     public AdminController(
         ISignalRepository signalRepo,
@@ -26,7 +29,8 @@ public class AdminController : ControllerBase
         ISettingsRepository settingsRepo,
         IUserRepository userRepo,
         IHoldingRepository holdingRepo,
-        IPortfolioService portfolioService)
+        IPortfolioService portfolioService,
+        ISignalIntegrationService signalIntegration)
     {
         _signalRepo = signalRepo;
         _performanceRepo = performanceRepo;
@@ -34,6 +38,7 @@ public class AdminController : ControllerBase
         _userRepo = userRepo;
         _holdingRepo = holdingRepo;
         _portfolioService = portfolioService;
+        _signalIntegration = signalIntegration;
     }
 
     /// <summary>
@@ -212,13 +217,34 @@ public class AdminController : ControllerBase
     }
 
     /// <summary>
-    /// Triggers signal generation. Stub until the Python pipeline bridge (D9)
-    /// is implemented; returns a message so the admin UI can show a result.
+    /// Triggers signal generation for every user (from settings rows) via the
+    /// integration facade. The facade retries with backoff; this endpoint
+    /// reports aggregate success/failure so the admin UI can show per-user
+    /// outcomes instead of a single hardcoded user run.
     /// </summary>
     [HttpPost("run-signals")]
-    public ActionResult<ApiResponse<string>> RunSignals()
+    public async Task<ActionResult<ApiResponse<string>>> RunSignals()
     {
-        var message = "Signal generation is not yet wired up (scheduled for D9).";
-        return Ok(ApiResponse<string>.Ok(message));
+        var summary = await _signalIntegration.RunForAllUsersAsync();
+        if (!summary.AllSucceeded)
+        {
+            var detail = string.Join("; ", summary.Errors);
+            return StatusCode(500, ApiResponse<string>.Fail($"Signal generation failed for {summary.Errors.Count} user(s): {detail}"));
+        }
+
+        return Ok(ApiResponse<string>.Ok($"Signal generation complete: {summary.UsersSucceeded} user(s), 0 failures"));
+    }
+
+    [HttpPost("run-daily-cycle")]
+    public async Task<ActionResult<ApiResponse<string>>> RunDailyCycle()
+    {
+        var runner = HttpContext.RequestServices.GetRequiredService<IDailyCycleRunner>();
+        var result = await runner.RunAsync();
+        if (result.Status == "FAILED")
+            return StatusCode(500, ApiResponse<string>.Fail($"Daily cycle failed: {result.Error}"));
+
+        return Ok(ApiResponse<string>.Ok(
+            $"Daily cycle {result.Status}: {result.UsersProcessed} user(s), " +
+            $"{result.SignalsGenerated} signal run(s), {result.SignalsExecuted} executed"));
     }
 }

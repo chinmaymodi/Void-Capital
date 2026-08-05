@@ -1,22 +1,42 @@
 using FluentMigrator.Runner;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Hosting.WindowsServices;
 using Serilog;
 using VoidCapital.Api.Data;
 using VoidCapital.Api.Middleware;
 using VoidCapital.Api.Modules.MarketData;
 using VoidCapital.Api.Modules.Portfolio;
 using VoidCapital.Api.Modules.Signals.Services;
+using VoidCapital.Api.Services;
 using VoidCapital.Api.Shared.Repositories;
 
 Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
+    // File sink so the Windows service (which has no console) leaves a
+    // diagnosable trail. Rolling daily, 14 days retained, next to the DLL.
+    .WriteTo.File(
+        Path.Combine(AppContext.BaseDirectory, "logs", "voidcapital-.log"),
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 14)
     .Enrich.WithProperty("Application", "VoidCapital")
     .CreateLogger();
 
 try
 {
-    var builder = WebApplication.CreateBuilder(args);
+    // Pin the content root to the assembly directory: Windows services (and
+    // bare `dotnet VoidCapital.Api.dll` launches) run with the current
+    // directory set to System32, which would otherwise hide appsettings.json
+    // and break connection-string discovery.
+    var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+    {
+        Args = args,
+        ContentRootPath = AppContext.BaseDirectory
+    });
     builder.Host.UseSerilog();
+    // Register with the Service Control Manager when launched as a Windows
+    // service (sc start). Without this, SCM kills the process after 30s
+    // (error 1053). No-op when run as a normal console app.
+    builder.Host.UseWindowsService();
 
     var postgresConnection = builder.Configuration.GetConnectionString("Postgres")
         ?? throw new InvalidOperationException("Connection string 'Postgres' is not configured.");
@@ -64,6 +84,14 @@ try
     builder.Services.AddScoped<IMarketDataService, MarketDataService>();
     builder.Services.AddScoped<ISignalService, SignalService>();
     builder.Services.AddScoped<SignalPerformanceService>();
+    builder.Services.Configure<PythonSettings>(
+        builder.Configuration.GetSection(PythonSettings.SectionName));
+    builder.Services.AddScoped<IProcessRunner, ProcessRunner>();
+    builder.Services.AddScoped<IPythonBridge, PythonBridge>();
+    builder.Services.AddScoped<ISignalIntegrationService, SignalIntegrationService>();
+    builder.Services.AddScoped<ICycleRunRepository, CycleRunRepository>();
+    builder.Services.AddScoped<IDailyCycleRunner, DailyCycleRunner>();
+    builder.Services.AddHostedService<DailyCycleService>();
 
     var app = builder.Build();
 

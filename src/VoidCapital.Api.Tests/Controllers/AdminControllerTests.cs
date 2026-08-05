@@ -8,6 +8,7 @@ using VoidCapital.Api.Modules.Portfolio.Models;
 using VoidCapital.Api.Modules.Signals;
 using VoidCapital.Api.Modules.Signals.DTOs;
 using VoidCapital.Api.Modules.Signals.Models;
+using VoidCapital.Api.Modules.Signals.Services;
 using VoidCapital.Api.Shared;
 using VoidCapital.Api.Shared.Repositories;
 using Xunit;
@@ -22,6 +23,7 @@ public class AdminControllerTests
     private readonly Mock<IUserRepository> _userRepo = new();
     private readonly Mock<IHoldingRepository> _holdingRepo = new();
     private readonly Mock<IPortfolioService> _portfolioService = new();
+    private readonly Mock<ISignalIntegrationService> _signalIntegration = new();
 
     private AdminController CreateController() => new(
         _signalRepo.Object,
@@ -29,7 +31,8 @@ public class AdminControllerTests
         _settingsRepo.Object,
         _userRepo.Object,
         _holdingRepo.Object,
-        _portfolioService.Object);
+        _portfolioService.Object,
+        _signalIntegration.Object);
 
     private static IngestSignalRequest MakeRequest(int? userId = 1) => new(
         UserId: userId,
@@ -300,13 +303,33 @@ public class AdminControllerTests
     // ---------- Run signals ----------
 
     [Fact]
-    public void RunSignals_ReturnsStubMessage()
+    public async Task RunSignals_WhenAllUsersSucceed_ReturnsSuccess()
     {
-        var result = CreateController().RunSignals();
+        _signalIntegration
+            .Setup(s => s.RunForAllUsersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SignalRunSummary(3, 3, []));
+
+        var result = await CreateController().RunSignals();
 
         var ok = result.Result.Should().BeOfType<OkObjectResult>().Subject;
         var envelope = ok.Value.Should().BeOfType<ApiResponse<string>>().Subject;
         envelope.Success.Should().BeTrue();
-        envelope.Data.Should().Contain("not yet wired");
+        envelope.Data.Should().Contain("3 user(s), 0 failures");
+    }
+
+    [Fact]
+    public async Task RunSignals_WhenAnyUserFails_Returns500WithDetails()
+    {
+        _signalIntegration
+            .Setup(s => s.RunForAllUsersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SignalRunSummary(3, 2, ["user 2: boom"]));
+
+        var result = await CreateController().RunSignals();
+
+        var status = result.Result.Should().BeOfType<ObjectResult>().Subject;
+        status.StatusCode.Should().Be(500);
+        var envelope = status.Value.Should().BeOfType<ApiResponse<string>>().Subject;
+        envelope.Success.Should().BeFalse();
+        envelope.Error.Should().Contain("user 2: boom");
     }
 }
