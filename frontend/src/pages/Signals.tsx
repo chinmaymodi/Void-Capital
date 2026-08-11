@@ -5,13 +5,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '../components/useToast';
 import { EmptyState, ErrorState, Spinner } from '../components/ui';
+import { useUser } from '../context/useUser';
 import {
   approveSignal,
   batchApproveSignals,
   batchRejectSignals,
   getTodaySignals,
   rejectSignal,
-  runSignalGeneration,
+  runSignalGenerationAndWait,
 } from '../services/api';
 import type { Signal, SignalBatchResult, SignalStatus } from '../types';
 
@@ -39,12 +40,17 @@ export function Signals() {
   const { showError, showSuccess } = useToast();
   const [running, setRunning] = useState(false);
   const pausedRef = useRef(false);
+  const { currentUserId } = useUser();
 
   const handleRunSignals = async () => {
     setRunning(true);
     try {
-      const message = await runSignalGeneration();
-      showSuccess(message);
+      const job = await runSignalGenerationAndWait();
+      if (job.status === 'SUCCEEDED') {
+        showSuccess(job.message ?? 'Signal generation complete');
+      } else {
+        showError(job.message ?? 'Signal generation failed');
+      }
       fetchData();
     } catch (err) {
       showError(err instanceof Error ? err.message : 'Failed to run signal generation');
@@ -56,14 +62,14 @@ export function Signals() {
   const fetchData = useCallback(() => {
     setLoading(true);
     setError(null);
-    getTodaySignals()
+    getTodaySignals(currentUserId)
       .then((items) => {
         setSignals(items);
         setLastUpdated(new Date());
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load signals'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [currentUserId]);
 
   useEffect(() => {
     fetchData();

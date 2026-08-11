@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { EmptyState, ErrorState, Spinner } from '../components/ui';
+import { useUser } from '../context/useUser';
 import { getTrades } from '../services/api';
 import type { PagedTrades, TradeFilters, TradeType } from '../types';
 
@@ -23,6 +24,7 @@ export function Trades() {
   const [data, setData] = useState<PagedTrades | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { currentUserId } = useUser();
 
   const [symbol, setSymbol] = useState('');
   const [type, setType] = useState<TradeType | ''>('');
@@ -48,11 +50,11 @@ export function Trades() {
       from: from || undefined,
       to: to || undefined,
     };
-    getTrades(filters)
+    getTrades(filters, currentUserId)
       .then(setData)
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load trades'))
       .finally(() => setLoading(false));
-  }, [page, pageSize, symbol, type, from, to]);
+  }, [page, pageSize, symbol, type, from, to, currentUserId]);
 
   useEffect(() => {
     fetchData();

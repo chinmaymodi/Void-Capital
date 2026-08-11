@@ -79,7 +79,7 @@ public class SignalIntegrationService : ISignalIntegrationService
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             ct.ThrowIfCancellationRequested();
-            var result = await _pythonBridge.RunSignalGeneration(userId, noGate: false);
+            var result = await _pythonBridge.RunSignalGeneration(userId, noGate: false, ct);
 
             if (result.Success)
             {

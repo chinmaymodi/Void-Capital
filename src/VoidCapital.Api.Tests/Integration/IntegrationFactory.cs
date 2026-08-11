@@ -2,31 +2,54 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Testcontainers.PostgreSql;
+using Testcontainers.Redis;
 using VoidCapital.Api.Data;
 using VoidCapital.Api.Modules.Signals.Services;
 
 namespace VoidCapital.Api.Tests.Integration;
 
 /// <summary>
-/// WebApplicationFactory pointed at the dedicated integration test database
-/// (void_capital_test on the local Docker Postgres). FluentMigrator runs on
-/// app boot, so the schema is created and migrations 001-003 applied before
-/// the first test hits an endpoint.
+/// WebApplicationFactory backed by disposable Testcontainers: a fresh
+/// Postgres container (schema created by FluentMigrator on app boot) and a
+/// Redis container. Connection strings come from the live containers, so the
+/// suite runs identically anywhere Docker is available -- no hand-configured
+/// local database, no dependence on whatever happens to be running.
 /// </summary>
-public class IntegrationFactory : WebApplicationFactory<Program>
+public class IntegrationFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
-    private const string TestPostgres =
-        "Host=localhost;Port=5432;Database=void_capital_test;Username=vc_user;Password=vc_pass";
-    private const string TestRedis = "localhost:6379";
+    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:16-alpine")
+        .WithDatabase("void_capital_test")
+        .WithUsername("vc_user")
+        .WithPassword("vc_pass")
+        .Build();
+
+    private readonly RedisContainer _redis = new RedisBuilder("redis:7-alpine")
+        .Build();
 
     public IDbContextFactory<AppDbContext> DbFactory =>
         Services.GetRequiredService<IDbContextFactory<AppDbContext>>();
 
+    /// <summary>Start the dependency containers before any test touches the host.</summary>
+    public async Task InitializeAsync()
+    {
+        await _postgres.StartAsync();
+        await _redis.StartAsync();
+    }
+
+    /// <summary>Tear down the host first, then the containers.</summary>
+    async Task IAsyncLifetime.DisposeAsync()
+    {
+        await base.DisposeAsync();
+        await _redis.DisposeAsync();
+        await _postgres.DisposeAsync();
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
-        builder.UseSetting("ConnectionStrings:Postgres", TestPostgres);
-        builder.UseSetting("ConnectionStrings:Redis", TestRedis);
+        builder.UseSetting("ConnectionStrings:Postgres", _postgres.GetConnectionString());
+        builder.UseSetting("ConnectionStrings:Redis", _redis.GetConnectionString());
         builder.ConfigureServices(services =>
         {
             // Replace the real Python bridge. Integration tests verify HTTP
@@ -48,15 +71,18 @@ public class IntegrationFactory : WebApplicationFactory<Program>
     /// <summary>Always-succeed bridge: instant, environment-independent.</summary>
     private sealed class StubPythonBridge : IPythonBridge
     {
-        public Task<PythonRunResult> RunSignalGeneration(int userId, bool noGate) =>
+        public Task<PythonRunResult> RunSignalGeneration(int userId, bool noGate, CancellationToken ct = default) =>
             Task.FromResult(new PythonRunResult(true, "0", ""));
+
+        public Task<PythonRunResult> RunDataRefreshAsync(CancellationToken ct = default) =>
+            Task.FromResult(new PythonRunResult(true, "", ""));
     }
 }
 
 /// <summary>
-/// All integration tests share one factory (one migrated test DB) and run
-/// serially. Tests isolate themselves with unique users/symbols rather than
-/// truncating shared tables.
+/// All integration tests share one factory (one set of containers, one
+/// migrated test DB) and run serially. Tests isolate themselves with unique
+/// users/symbols rather than truncating shared tables.
 /// </summary>
 [CollectionDefinition("integration")]
 public class IntegrationCollection : ICollectionFixture<IntegrationFactory>;

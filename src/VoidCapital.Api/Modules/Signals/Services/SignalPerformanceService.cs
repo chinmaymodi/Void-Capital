@@ -32,7 +32,10 @@ public class SignalPerformanceService
             if (string.IsNullOrEmpty(symbol))
                 continue;
 
-            var currentPrice = await _marketData.GetCurrentPriceAsync(symbol);
+            // D3: fresh price, not the 1h Redis cache -- the cycle just wrote
+            // new signals and resolved them in the same run, so a stale quote
+            // could settle a signal against yesterday's price.
+            var currentPrice = await _marketData.GetCurrentPriceFreshAsync(symbol);
             var age = (DateTime.UtcNow - perf.CreatedAt).Days;
 
             if (perf.TargetPrice.HasValue && currentPrice >= perf.TargetPrice.Value)

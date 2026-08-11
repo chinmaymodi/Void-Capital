@@ -6,11 +6,13 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Signals from '../pages/Signals';
 import { ToastProvider } from '../components/Toast';
+import { UserProvider } from '../context/UserProvider';
 import {
   approveSignal,
   batchApproveSignals,
   batchRejectSignals,
   getTodaySignals,
+  getUsers,
   rejectSignal,
 } from '../services/api';
 import type { Signal } from '../types';
@@ -22,6 +24,7 @@ const mockedApproveSignal = vi.mocked(approveSignal);
 const mockedRejectSignal = vi.mocked(rejectSignal);
 const mockedBatchApprove = vi.mocked(batchApproveSignals);
 const mockedBatchReject = vi.mocked(batchRejectSignals);
+const mockedGetUsers = vi.mocked(getUsers);
 
 const sampleSignals: Signal[] = [
   {
@@ -59,7 +62,9 @@ const sampleSignals: Signal[] = [
 function renderSignals() {
   return render(
     <ToastProvider>
-      <Signals />
+      <UserProvider>
+        <Signals />
+      </UserProvider>
     </ToastProvider>,
   );
 }
@@ -71,6 +76,7 @@ describe('Signals', () => {
     mockedRejectSignal.mockReset();
     mockedBatchApprove.mockReset();
     mockedBatchReject.mockReset();
+    mockedGetUsers.mockResolvedValue([{ id: 1, name: 'Trader One' }]);
   });
 
   afterEach(() => {

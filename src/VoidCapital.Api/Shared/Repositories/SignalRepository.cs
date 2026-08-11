@@ -34,6 +34,14 @@ public class SignalRepository : ISignalRepository
             .ToListAsync();
     }
 
+    public async Task<IEnumerable<Signal>> GetAllSignalsOnDateAsync(DateOnly date)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        return await db.Signals
+            .Where(s => s.Date == date)
+            .ToListAsync();
+    }
+
     public async Task<Signal> AddAsync(Signal signal)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();

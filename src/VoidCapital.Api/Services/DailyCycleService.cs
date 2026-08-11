@@ -63,6 +63,24 @@ public class DailyCycleService : BackgroundService
             var cycleRepo = scope.ServiceProvider.GetRequiredService<ICycleRunRepository>();
             var lastRun = (await cycleRepo.GetRecentAsync(1)).FirstOrDefault();
 
+            // A run stuck in RUNNING across a restart (e.g. a pre-fix hang with
+            // no timeout) would otherwise block catch-up forever. Any legit run
+            // is bounded by per-step timeouts and finishes well within 3 hours.
+            if (lastRun is { Status: "RUNNING" } &&
+                lastRun.StartedAt < DateTime.UtcNow.AddHours(-3))
+            {
+                lastRun.Status = "FAILED";
+                lastRun.Error = $"Aborted on startup: run stuck in RUNNING since {lastRun.StartedAt:O}";
+                // Leave FinishedAt null: the stuck run never completed, so
+                // NeedsCatchUp must still see the slot as missed and fire
+                // catch-up. Any non-null FinishedAt (now, or backdated to
+                // StartedAt) can make the most recent slot look served when
+                // the stuck run was that slot's own scheduled run.
+                lastRun.FinishedAt = null;
+                await cycleRepo.UpdateAsync(lastRun);
+                _logger.LogWarning("Marked stale RUNNING cycle run {RunId} as FAILED", lastRun.Id);
+            }
+
             var lastScheduled = LastScheduledSlotUtc(DateTime.UtcNow);
             var missed = NeedsCatchUp(lastScheduled, lastRun?.FinishedAt);
 

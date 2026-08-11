@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { useUser } from '../context/useUser';
 import { EmptyState, ErrorState, Spinner, StatCard } from '../components/ui';
 import { getPortfolio, getPortfolioHistory } from '../services/api';
 import type { PnlSnapshot, PortfolioState } from '../types';
@@ -18,18 +19,19 @@ export function Dashboard() {
   const [history, setHistory] = useState<PnlSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { currentUserId } = useUser();
 
   const fetchData = useCallback(() => {
     setLoading(true);
     setError(null);
-    Promise.all([getPortfolio(), getPortfolioHistory()])
+    Promise.all([getPortfolio(currentUserId), getPortfolioHistory(currentUserId)])
       .then(([portfolio, snapshots]) => {
         setState(portfolio);
         setHistory(snapshots);
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load portfolio'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [currentUserId]);
 
   useEffect(() => {
     fetchData();

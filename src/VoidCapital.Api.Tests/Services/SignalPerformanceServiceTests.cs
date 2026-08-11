@@ -28,7 +28,7 @@ public class SignalPerformanceServiceTests
     };
 
     private void GivenPrice(decimal price) =>
-        _marketData.Setup(m => m.GetCurrentPriceAsync("RELIANCE")).ReturnsAsync(price);
+        _marketData.Setup(m => m.GetCurrentPriceFreshAsync("RELIANCE")).ReturnsAsync(price);
 
     private void GivenPending(params SignalPerformance[] perfs) =>
         _perfRepo.Setup(r => r.GetPendingPerformancesAsync()).ReturnsAsync(perfs);
@@ -101,7 +101,7 @@ public class SignalPerformanceServiceTests
 
         await CreateService().ResolvePendingSignalsAsync();
 
-        _marketData.Verify(m => m.GetCurrentPriceAsync(It.IsAny<string>()), Times.Never);
+        _marketData.Verify(m => m.GetCurrentPriceFreshAsync(It.IsAny<string>()), Times.Never);
         _perfRepo.Verify(r => r.UpdateAsync(It.IsAny<SignalPerformance>()), Times.Never);
     }
 }

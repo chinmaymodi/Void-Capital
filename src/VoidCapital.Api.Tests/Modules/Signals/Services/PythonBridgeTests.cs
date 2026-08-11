@@ -16,7 +16,9 @@ public class PythonBridgeTests
     public async Task RunSignalGeneration_ReturnsSuccess_WhenProcessExitsZero()
     {
         var mockRunner = new Mock<IProcessRunner>();
-        mockRunner.Setup(r => r.RunAsync(It.IsAny<string>(), It.IsAny<string>()))
+        mockRunner.Setup(r => r.RunAsync(
+                It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<CancellationToken>(), It.IsAny<TimeSpan?>()))
             .ReturnsAsync((0, "Success", ""));
 
         var bridge = new PythonBridge(mockRunner.Object, Options.Create(MakeSettings()));
@@ -37,14 +39,18 @@ public class PythonBridgeTests
 
         Assert.False(result.Success);
         Assert.Contains("not configured", result.Error);
-        mockRunner.Verify(r => r.RunAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        mockRunner.Verify(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<CancellationToken>(), It.IsAny<TimeSpan?>()), Times.Never);
     }
 
     [Fact]
     public async Task RunSignalGeneration_PassesConfiguredPathsAndNoGateFlag()
     {
         var mockRunner = new Mock<IProcessRunner>();
-        mockRunner.Setup(r => r.RunAsync(It.IsAny<string>(), It.IsAny<string>()))
+        mockRunner.Setup(r => r.RunAsync(
+                It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<CancellationToken>(), It.IsAny<TimeSpan?>()))
             .ReturnsAsync((0, "", ""));
 
         var bridge = new PythonBridge(mockRunner.Object, Options.Create(MakeSettings()));
@@ -52,14 +58,18 @@ public class PythonBridgeTests
 
         mockRunner.Verify(r => r.RunAsync(
             @"C:\tools\python.exe",
-            $"\"C:\\pipeline\\generate_signals.py\" --user 2 --no-gate"), Times.Once);
+            $"\"C:\\pipeline\\generate_signals.py\" --user 2 --no-gate",
+            It.IsAny<CancellationToken>(),
+            It.IsAny<TimeSpan?>()), Times.Once);
     }
 
     [Fact]
     public async Task RunSignalGeneration_WhenProcessExitsNonZero_ReturnsFailureWithError()
     {
         var mockRunner = new Mock<IProcessRunner>();
-        mockRunner.Setup(r => r.RunAsync(It.IsAny<string>(), It.IsAny<string>()))
+        mockRunner.Setup(r => r.RunAsync(
+                It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<CancellationToken>(), It.IsAny<TimeSpan?>()))
             .ReturnsAsync((1, "", "boom"));
 
         var bridge = new PythonBridge(mockRunner.Object, Options.Create(MakeSettings()));

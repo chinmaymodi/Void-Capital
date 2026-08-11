@@ -22,6 +22,7 @@ public class AdminController : ControllerBase
     private readonly IHoldingRepository _holdingRepo;
     private readonly IPortfolioService _portfolioService;
     private readonly ISignalIntegrationService _signalIntegration;
+    private readonly ISignalJobService _signalJobService;
 
     public AdminController(
         ISignalRepository signalRepo,
@@ -30,7 +31,8 @@ public class AdminController : ControllerBase
         IUserRepository userRepo,
         IHoldingRepository holdingRepo,
         IPortfolioService portfolioService,
-        ISignalIntegrationService signalIntegration)
+        ISignalIntegrationService signalIntegration,
+        ISignalJobService signalJobService)
     {
         _signalRepo = signalRepo;
         _performanceRepo = performanceRepo;
@@ -39,6 +41,7 @@ public class AdminController : ControllerBase
         _holdingRepo = holdingRepo;
         _portfolioService = portfolioService;
         _signalIntegration = signalIntegration;
+        _signalJobService = signalJobService;
     }
 
     /// <summary>
@@ -217,22 +220,25 @@ public class AdminController : ControllerBase
     }
 
     /// <summary>
-    /// Triggers signal generation for every user (from settings rows) via the
-    /// integration facade. The facade retries with backoff; this endpoint
-    /// reports aggregate success/failure so the admin UI can show per-user
-    /// outcomes instead of a single hardcoded user run.
+    /// Kicks off signal generation for every user (from settings rows) as a
+    /// background job and returns immediately. The Python pipeline takes 1-2
+    /// minutes per user, far beyond the frontend's 15s axios timeout, so the
+    /// job runs out-of-band; poll GET run-signals/{jobId} for the outcome.
     /// </summary>
     [HttpPost("run-signals")]
-    public async Task<ActionResult<ApiResponse<string>>> RunSignals()
+    public ActionResult<ApiResponse<SignalJobDto>> RunSignals()
     {
-        var summary = await _signalIntegration.RunForAllUsersAsync();
-        if (!summary.AllSucceeded)
-        {
-            var detail = string.Join("; ", summary.Errors);
-            return StatusCode(500, ApiResponse<string>.Fail($"Signal generation failed for {summary.Errors.Count} user(s): {detail}"));
-        }
+        var job = _signalJobService.Start();
+        return Accepted(ApiResponse<SignalJobDto>.Ok(SignalJobDto.From(job)));
+    }
 
-        return Ok(ApiResponse<string>.Ok($"Signal generation complete: {summary.UsersSucceeded} user(s), 0 failures"));
+    /// <summary>Status of an async signal-generation job.</summary>
+    [HttpGet("run-signals/{jobId:int}")]
+    public ActionResult<ApiResponse<SignalJobDto>> GetRunSignalsStatus(int jobId)
+    {
+        var job = _signalJobService.Get(jobId)
+            ?? throw new NotFoundException($"Signal generation job {jobId} was not found.");
+        return Ok(ApiResponse<SignalJobDto>.Ok(SignalJobDto.From(job)));
     }
 
     [HttpPost("run-daily-cycle")]

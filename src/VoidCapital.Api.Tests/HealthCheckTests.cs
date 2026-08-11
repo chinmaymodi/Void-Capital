@@ -1,21 +1,28 @@
 using System.Net;
 using System.Net.Http.Json;
-using Microsoft.AspNetCore.Mvc.Testing;
 using VoidCapital.Api.Shared;
+using VoidCapital.Api.Tests.Integration;
 
 namespace VoidCapital.Api.Tests;
 
-public class HealthCheckTests : IClassFixture<WebApplicationFactory<Program>>
+/// <summary>
+/// Health endpoints against the container-backed host. The app's /api/health
+/// probes PostgreSQL and Redis via ASP.NET health checks, so it can only
+/// assert an exact 200 when those dependencies are actually healthy --
+/// Testcontainers provides them deterministically for every run.
+/// </summary>
+[Collection("integration")]
+public class HealthCheckTests
 {
-    private readonly WebApplicationFactory<Program> _factory;
+    private readonly IntegrationFactory _factory;
 
-    public HealthCheckTests(WebApplicationFactory<Program> factory)
+    public HealthCheckTests(IntegrationFactory factory)
     {
         _factory = factory;
     }
 
     [Fact]
-    public async Task HealthEndpoint_ReturnsOk()
+    public async Task HealthEndpoint_ReturnsOk_WithDependenciesHealthy()
     {
         // Arrange
         var client = _factory.CreateClient();
@@ -24,13 +31,9 @@ public class HealthCheckTests : IClassFixture<WebApplicationFactory<Program>>
         var response = await client.GetAsync("/api/health");
 
         // Assert
-        // Healthy -> 200 OK; unhealthy -> 503 ServiceUnavailable (default
-        // HealthChecks behavior). The test host has no PostgreSQL/Redis, so the
-        // only assertion that is stable across environments is that the endpoint
-        // exists and returns one of these two documented states.
-        Assert.True(
-            response.StatusCode is HttpStatusCode.OK or HttpStatusCode.ServiceUnavailable,
-            $"Expected 200 or 503, got {(int)response.StatusCode}");
+        // Both registered health checks (NpgSql + Redis) probe the live
+        // containers, so the only stable outcome is 200 OK.
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]

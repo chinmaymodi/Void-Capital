@@ -5,7 +5,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SettingsPage from '../pages/Settings';
-import { getSettings, updateSettings } from '../services/api';
+import { UserProvider } from '../context/UserProvider';
+import { getSettings, getUsers, updateSettings } from '../services/api';
 import { ToastProvider } from '../components/Toast';
 import type { Settings } from '../types';
 
@@ -13,6 +14,7 @@ vi.mock('../services/api');
 
 const mockedGetSettings = vi.mocked(getSettings);
 const mockedUpdateSettings = vi.mocked(updateSettings);
+const mockedGetUsers = vi.mocked(getUsers);
 
 const sampleSettings: Settings = {
   id: 1,
@@ -27,7 +29,9 @@ const sampleSettings: Settings = {
 function renderSettings() {
   return render(
     <ToastProvider>
-      <SettingsPage />
+      <UserProvider>
+        <SettingsPage />
+      </UserProvider>
     </ToastProvider>,
   );
 }
@@ -36,6 +40,7 @@ describe('SettingsPage', () => {
   beforeEach(() => {
     mockedGetSettings.mockReset();
     mockedUpdateSettings.mockReset();
+    mockedGetUsers.mockResolvedValue([{ id: 1, name: 'Trader One' }]);
   });
 
   afterEach(() => {
@@ -73,6 +78,7 @@ describe('SettingsPage', () => {
     await waitFor(() => {
       expect(mockedUpdateSettings).toHaveBeenCalledWith(
         expect.objectContaining({ watchlist: ['RELIANCE', 'TCS', 'INFY'] }),
+        1,
       );
     });
   });
@@ -108,6 +114,7 @@ describe('SettingsPage', () => {
     await waitFor(() => {
       expect(mockedUpdateSettings).toHaveBeenCalledWith(
         expect.objectContaining({ watchlist: ['RELIANCE'] }),
+        1,
       );
     });
   });
@@ -127,6 +134,7 @@ describe('SettingsPage', () => {
     await waitFor(() => {
       expect(mockedUpdateSettings).toHaveBeenCalledWith(
         expect.objectContaining({ autoExecute: true }),
+        1,
       );
     });
   });

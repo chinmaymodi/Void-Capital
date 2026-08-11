@@ -1,7 +1,7 @@
 // Admin page (D7.2): signal generation control, per-system-user portfolio
 // limits config, global settings, and manual square-off with confirmation.
-// run-signals is stubbed on the backend (D9) so the button still exercises
-// the API and shows the returned message.
+// run-signals runs as a background job (the Python pipeline takes minutes);
+// the page polls the job status until it completes.
 
 import { useCallback, useEffect, useState } from 'react';
 import { useToast } from '../components/useToast';
@@ -9,7 +9,7 @@ import { ErrorState, Spinner, StatCard } from '../components/ui';
 import {
   getAdminSettings,
   getAdminStatus,
-  runSignalGeneration,
+  runSignalGenerationAndWait,
   squareOff,
   updateAdminSettings,
   updateGlobalSettings,
@@ -76,9 +76,13 @@ export function Admin() {
   const handleRunSignals = async () => {
     setRunning(true);
     try {
-      const message = await runSignalGeneration();
+      const job = await runSignalGenerationAndWait();
       setLastRun(new Date().toLocaleTimeString());
-      showSuccess(message);
+      if (job.status === 'SUCCEEDED') {
+        showSuccess(job.message ?? 'Signal generation complete');
+      } else {
+        showError(job.message ?? 'Signal generation failed');
+      }
       fetchData(); // refresh pending count
     } catch (err) {
       showError(err instanceof Error ? err.message : 'Failed to trigger signal generation');
@@ -177,7 +181,7 @@ export function Admin() {
                 <span data-testid="last-run"> Last run: {lastRun}</span>
               )}
             </p>
-            <p className="modal-hint">Currently stubbed on the backend (wired in D9).</p>
+            <p className="modal-hint">Runs as a background job; the page polls until it completes.</p>
           </div>
           <button
             type="button"

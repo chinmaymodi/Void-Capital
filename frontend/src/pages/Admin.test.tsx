@@ -9,18 +9,18 @@ import { ToastProvider } from '../components/Toast';
 import {
   getAdminSettings,
   getAdminStatus,
-  runSignalGeneration,
+  runSignalGenerationAndWait,
   squareOff,
   updateAdminSettings,
   updateGlobalSettings,
 } from '../services/api';
-import type { AdminStatus, Settings } from '../types';
+import type { AdminStatus, Settings, SignalJob } from '../types';
 
 vi.mock('../services/api');
 
 const mockedGetAdminStatus = vi.mocked(getAdminStatus);
 const mockedGetAdminSettings = vi.mocked(getAdminSettings);
-const mockedRunSignalGeneration = vi.mocked(runSignalGeneration);
+const mockedRunSignalGenerationAndWait = vi.mocked(runSignalGenerationAndWait);
 const mockedUpdateAdminSettings = vi.mocked(updateAdminSettings);
 const mockedUpdateGlobalSettings = vi.mocked(updateGlobalSettings);
 const mockedSquareOff = vi.mocked(squareOff);
@@ -59,7 +59,7 @@ function mockDefaultResponses() {
   mockedGetAdminSettings.mockImplementation((userId: number) =>
     Promise.resolve(userId === 2 ? settings2 : settings3),
   );
-  mockedRunSignalGeneration.mockResolvedValue('Signal generation completed');
+  mockedRunSignalGenerationAndWait.mockResolvedValue(doneJob);
   mockedUpdateAdminSettings.mockImplementation((userId: number, s: Settings) =>
     Promise.resolve({ ...s, userId }),
   );
@@ -71,6 +71,14 @@ function mockDefaultResponses() {
     remainingCash: 20000,
   });
 }
+
+const doneJob: SignalJob = {
+  jobId: 1,
+  status: 'SUCCEEDED',
+  startedAt: '2026-08-11T10:00:00Z',
+  finishedAt: '2026-08-11T10:02:00Z',
+  message: 'Signal generation completed: 3 user(s), 0 failures',
+};
 
 function renderPage() {
   return render(
@@ -107,7 +115,7 @@ describe('Admin', () => {
     expect(screen.getByTestId('interest-rate-3')).toHaveValue(0.0005);
   });
 
-  it('run signals calls the API and shows success toast', async () => {
+  it('run signals starts a job, polls to completion, and shows the result toast', async () => {
     const user = userEvent.setup();
     renderPage();
 
@@ -115,7 +123,7 @@ describe('Admin', () => {
     await user.click(screen.getByTestId('run-signals'));
 
     await waitFor(() => {
-      expect(mockedRunSignalGeneration).toHaveBeenCalledTimes(1);
+      expect(mockedRunSignalGenerationAndWait).toHaveBeenCalledTimes(1);
     });
     expect(await screen.findByText(/Signal generation completed/i)).toBeInTheDocument();
   });

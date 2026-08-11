@@ -12,6 +12,7 @@ public record DailyCycleRunResult(string Status, int UsersProcessed, int Signals
 
 /// <summary>
 /// Executes one full daily cycle (ticket D10.1):
+///   0. Refresh daily features (D1: refresh_daily.py -> market_data.features)
 ///   1. Signal generation for every user (facade -> Python pipeline)
 ///   2. Auto-execute signals for users with AutoExecute (min-confidence gated)
 ///   3. Resolve pending signal performance (target/stop/expiry)
@@ -28,6 +29,7 @@ public interface IDailyCycleRunner
 
 public class DailyCycleRunner : IDailyCycleRunner
 {
+    private readonly IPythonBridge _pythonBridge;
     private readonly ISignalIntegrationService _signalIntegration;
     private readonly ISignalService _signalService;
     private readonly ISignalRepository _signalRepo;
@@ -40,6 +42,7 @@ public class DailyCycleRunner : IDailyCycleRunner
     private readonly ILogger<DailyCycleRunner> _logger;
 
     public DailyCycleRunner(
+        IPythonBridge pythonBridge,
         ISignalIntegrationService signalIntegration,
         ISignalService signalService,
         ISignalRepository signalRepo,
@@ -51,6 +54,7 @@ public class DailyCycleRunner : IDailyCycleRunner
         ICycleRunRepository cycleRunRepo,
         ILogger<DailyCycleRunner> logger)
     {
+        _pythonBridge = pythonBridge;
         _signalIntegration = signalIntegration;
         _signalService = signalService;
         _signalRepo = signalRepo;
@@ -70,9 +74,39 @@ public class DailyCycleRunner : IDailyCycleRunner
 
         try
         {
+            // 0. Refresh daily features (D1). Approved behavior: a failed
+            // refresh logs and continues on yesterday's features -- the cycle
+            // must not die because the IV computation was slow or the data
+            // feed hiccuped.
+            try
+            {
+                var refresh = await _pythonBridge.RunDataRefreshAsync(ct);
+                if (refresh.Success)
+                {
+                    _logger.LogInformation("Feature refresh completed");
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Feature refresh failed, continuing on yesterday's features: {Error}",
+                        refresh.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Feature refresh threw, continuing on yesterday's features");
+            }
+
             // 1. Signal generation for every user
             var summary = await _signalIntegration.RunForAllUsersAsync(ct);
             run.UsersProcessed = summary.UsersProcessed;
+
+            // Real signal count written by the Python pipeline for today's IST
+            // trading date (cycle runs post-close at 12:30 UTC = 18:30 IST, so
+            // the UTC and IST calendar dates coincide).
+            var istToday = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5.5));
+            run.SignalsGenerated = (await _signalRepo.GetAllSignalsOnDateAsync(istToday))?.Count() ?? 0;
 
             // 2. Auto-execute signals for auto-execute users, min-confidence gated
             var executed = 0;
@@ -128,8 +162,10 @@ public class DailyCycleRunner : IDailyCycleRunner
                 await _portfolioService.RecordDailySnapshotAsync(user.Id);
             }
 
-            run.Status = "SUCCEEDED";
-            run.SignalsGenerated = summary.UsersSucceeded;
+            // A Python failure is not an exception: RunForAllUsersAsync returns
+            // a summary with errors. Report it honestly instead of SUCCEEDED.
+            run.Status = summary.AllSucceeded ? "SUCCEEDED" : "FAILED";
+            run.Error = summary.AllSucceeded ? null : string.Join("; ", summary.Errors);
         }
         catch (Exception ex)
         {

@@ -9,6 +9,7 @@ using VoidCapital.Api.Modules.Signals;
 using VoidCapital.Api.Modules.Signals.DTOs;
 using VoidCapital.Api.Modules.Signals.Models;
 using VoidCapital.Api.Modules.Signals.Services;
+using VoidCapital.Api.Services;
 using VoidCapital.Api.Shared;
 using VoidCapital.Api.Shared.Repositories;
 using Xunit;
@@ -24,6 +25,7 @@ public class AdminControllerTests
     private readonly Mock<IHoldingRepository> _holdingRepo = new();
     private readonly Mock<IPortfolioService> _portfolioService = new();
     private readonly Mock<ISignalIntegrationService> _signalIntegration = new();
+    private readonly Mock<ISignalJobService> _signalJobService = new();
 
     private AdminController CreateController() => new(
         _signalRepo.Object,
@@ -32,7 +34,8 @@ public class AdminControllerTests
         _userRepo.Object,
         _holdingRepo.Object,
         _portfolioService.Object,
-        _signalIntegration.Object);
+        _signalIntegration.Object,
+        _signalJobService.Object);
 
     private static IngestSignalRequest MakeRequest(int? userId = 1) => new(
         UserId: userId,
@@ -300,36 +303,52 @@ public class AdminControllerTests
         envelope.Data.Users.First(u => u.UserId == 1).TotalReturnPercent.Should().Be(0.1m);
     }
 
-    // ---------- Run signals ----------
+    // ---------- Run signals (async job) ----------
 
     [Fact]
-    public async Task RunSignals_WhenAllUsersSucceed_ReturnsSuccess()
+    public void RunSignals_StartsJobAndReturnsAcceptedWithRunningStatus()
     {
-        _signalIntegration
-            .Setup(s => s.RunForAllUsersAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new SignalRunSummary(3, 3, []));
+        var job = new SignalJob { JobId = 7, StartedAt = DateTime.UtcNow };
+        _signalJobService.Setup(s => s.Start()).Returns(job);
 
-        var result = await CreateController().RunSignals();
+        var result = CreateController().RunSignals();
 
-        var ok = result.Result.Should().BeOfType<OkObjectResult>().Subject;
-        var envelope = ok.Value.Should().BeOfType<ApiResponse<string>>().Subject;
+        var accepted = result.Result.Should().BeOfType<AcceptedResult>().Subject;
+        var envelope = accepted.Value.Should().BeOfType<ApiResponse<SignalJobDto>>().Subject;
         envelope.Success.Should().BeTrue();
-        envelope.Data.Should().Contain("3 user(s), 0 failures");
+        envelope.Data!.JobId.Should().Be(7);
+        envelope.Data.Status.Should().Be("RUNNING");
+        _signalJobService.Verify(s => s.Start(), Times.Once);
     }
 
     [Fact]
-    public async Task RunSignals_WhenAnyUserFails_Returns500WithDetails()
+    public void GetRunSignalsStatus_ReturnsJobStatus()
     {
-        _signalIntegration
-            .Setup(s => s.RunForAllUsersAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new SignalRunSummary(3, 2, ["user 2: boom"]));
+        var job = new SignalJob
+        {
+            JobId = 7,
+            StartedAt = DateTime.UtcNow.AddMinutes(-5),
+            FinishedAt = DateTime.UtcNow,
+            Status = SignalJobStatus.SUCCEEDED,
+            Message = "Signal generation complete: 3 user(s), 0 failures"
+        };
+        _signalJobService.Setup(s => s.Get(7)).Returns(job);
 
-        var result = await CreateController().RunSignals();
+        var result = CreateController().GetRunSignalsStatus(7);
 
-        var status = result.Result.Should().BeOfType<ObjectResult>().Subject;
-        status.StatusCode.Should().Be(500);
-        var envelope = status.Value.Should().BeOfType<ApiResponse<string>>().Subject;
-        envelope.Success.Should().BeFalse();
-        envelope.Error.Should().Contain("user 2: boom");
+        var ok = result.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var envelope = ok.Value.Should().BeOfType<ApiResponse<SignalJobDto>>().Subject;
+        envelope.Data!.Status.Should().Be("SUCCEEDED");
+        envelope.Data.Message.Should().Contain("3 user(s)");
+    }
+
+    [Fact]
+    public void GetRunSignalsStatus_UnknownJob_Returns404()
+    {
+        _signalJobService.Setup(s => s.Get(99)).Returns((SignalJob?)null);
+
+        var act = () => CreateController().GetRunSignalsStatus(99);
+
+        act.Should().Throw<NotFoundException>();
     }
 }

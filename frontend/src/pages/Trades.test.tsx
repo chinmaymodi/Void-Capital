@@ -5,12 +5,14 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Trades from '../pages/Trades';
-import { getTrades } from '../services/api';
+import { UserProvider } from '../context/UserProvider';
+import { getTrades, getUsers } from '../services/api';
 import type { PagedTrades } from '../types';
 
 vi.mock('../services/api');
 
 const mockedGetTrades = vi.mocked(getTrades);
+const mockedGetUsers = vi.mocked(getUsers);
 
 const samplePage: PagedTrades = {
   items: [
@@ -41,12 +43,17 @@ const samplePage: PagedTrades = {
 };
 
 function renderTrades() {
-  return render(<Trades />);
+  return render(
+    <UserProvider>
+      <Trades />
+    </UserProvider>,
+  );
 }
 
 describe('Trades', () => {
   beforeEach(() => {
     mockedGetTrades.mockReset();
+    mockedGetUsers.mockResolvedValue([{ id: 1, name: 'Trader One' }]);
   });
 
   afterEach(() => {
@@ -82,6 +89,7 @@ describe('Trades', () => {
           type: 'BUY',
           page: 1,
         }),
+        1,
       );
     });
   });
@@ -101,6 +109,7 @@ describe('Trades', () => {
     await waitFor(() => {
       expect(mockedGetTrades).toHaveBeenLastCalledWith(
         expect.objectContaining({ symbol: undefined, type: undefined, from: undefined, to: undefined, page: 1 }),
+        1,
       );
     });
   });
@@ -117,6 +126,7 @@ describe('Trades', () => {
     await waitFor(() => {
       expect(mockedGetTrades).toHaveBeenLastCalledWith(
         expect.objectContaining({ pageSize: 50, page: 1 }),
+        1,
       );
     });
   });
@@ -132,7 +142,7 @@ describe('Trades', () => {
     await user.click(next);
 
     await waitFor(() => {
-      expect(mockedGetTrades).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }));
+      expect(mockedGetTrades).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }), 1);
     });
   });
 

@@ -191,7 +191,7 @@ public class SignalFlowIntegrationTests : IDisposable
         var response = await _client.PostAsync($"/api/v1/signals/{signals[0].Id}/approve", null);
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var envelope = await response.Content.ReadFromJsonAsync<TestEnvelope<IngestedSignal>>();
-        envelope!.Data.Status.Should().Be("APPROVED");
+        envelope!.Data!.Status.Should().Be("APPROVED");
 
         // No trade should have been created.
         await using var db = await _factory.CreateDbAsync();
@@ -212,7 +212,7 @@ public class SignalFlowIntegrationTests : IDisposable
         var response = await _client.PostAsync($"/api/v1/signals/{signals[0].Id}/reject", null);
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var envelope = await response.Content.ReadFromJsonAsync<TestEnvelope<IngestedSignal>>();
-        envelope!.Data.Status.Should().Be("REJECTED");
+        envelope!.Data!.Status.Should().Be("REJECTED");
     }
 
     [Fact]
@@ -248,7 +248,7 @@ public class SignalFlowIntegrationTests : IDisposable
         var response = await _client.PostAsync($"/api/v1/signals/{signals[0].Id}/approve", null);
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var envelope = await response.Content.ReadFromJsonAsync<TestEnvelope<IngestedSignal>>();
-        envelope!.Data.Status.Should().Be("EXECUTED");
+        envelope!.Data!.Status.Should().Be("EXECUTED");
 
         await using var db = await _factory.CreateDbAsync();
         var trade = await db.Trades
@@ -275,7 +275,7 @@ public class SignalFlowIntegrationTests : IDisposable
         var response = await _client.PostAsync($"/api/v1/signals/{signals[0].Id}/approve", null);
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var envelope = await response.Content.ReadFromJsonAsync<TestEnvelope<IngestedSignal>>();
-        envelope!.Data.Status.Should().Be("FAILED");
+        envelope!.Data!.Status.Should().Be("FAILED");
 
         // failure_reason persisted to the model_predictions row.
         await using var db = await _factory.CreateDbAsync();
@@ -297,7 +297,7 @@ public class SignalFlowIntegrationTests : IDisposable
         var response = await _client.PostAsync($"/api/v1/signals/{signals[0].Id}/approve", null);
 
         var envelope = await response.Content.ReadFromJsonAsync<TestEnvelope<IngestedSignal>>();
-        envelope!.Data.Status.Should().Be("FAILED");
+        envelope!.Data!.Status.Should().Be("FAILED");
     }
 
     // ---------- Batch ----------
@@ -322,3 +322,4 @@ public class SignalFlowIntegrationTests : IDisposable
 
     private record TestEnvelope<T>(bool Success, T? Data, string? Error, string? TraceId);
 }
+

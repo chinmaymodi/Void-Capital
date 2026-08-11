@@ -4,6 +4,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using VoidCapital.Api.Modules.MarketData;
 using VoidCapital.Api.Modules.Portfolio.Models;
+using VoidCapital.Api.Modules.Signals.DTOs;
 using Xunit;
 
 namespace VoidCapital.Api.Tests.Integration;
@@ -157,6 +158,41 @@ public class AdminEndpointsIntegrationTests : IDisposable
         b.Data.Watchlist.Should().BeEquivalentTo("INFY", "RELIANCE");
     }
 
+    [Fact]
+    public async Task GlobalSettings_SyncsPortfolioWatchlistTable()
+    {
+        var userA = await CreateUserAsync("IT Admin Global WL A");
+        var userB = await CreateUserAsync("IT Admin Global WL B");
+
+        // Global PUT must write portfolio.watchlist rows for every user,
+        // not just the settings JSON column. This is the D2 regression:
+        // the deployed service binary predates the sync + migration 004.
+        var response = await _client.PutAsJsonAsync("/api/v1/admin/settings/global", new
+        {
+            minConfidence = 0.9m,
+            watchlist = new[] { "INFY", "RELIANCE" }
+        });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await using var db = await _factory.CreateDbAsync();
+        var a = await db.Watchlist.Where(w => w.UserId == userA).Select(w => w.Symbol).ToListAsync();
+        var b = await db.Watchlist.Where(w => w.UserId == userB).Select(w => w.Symbol).ToListAsync();
+        a.Should().BeEquivalentTo("INFY", "RELIANCE");
+        b.Should().BeEquivalentTo("INFY", "RELIANCE");
+
+        // Re-PUT with a different watchlist: old symbols removed, new added.
+        var second = await _client.PutAsJsonAsync("/api/v1/admin/settings/global", new
+        {
+            minConfidence = 0.9m,
+            watchlist = new[] { "TCS" }
+        });
+        second.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await using var db2 = await _factory.CreateDbAsync();
+        var a2 = await db2.Watchlist.Where(w => w.UserId == userA).Select(w => w.Symbol).ToListAsync();
+        a2.Should().BeEquivalentTo("TCS");
+    }
+
     // ---------- Square off ----------
 
     [Fact]
@@ -234,14 +270,30 @@ public class AdminEndpointsIntegrationTests : IDisposable
         balance.TotalReturn.Should().Be(0m);
     }
 
-    // ---------- Run signals (D9 real implementation) ----------
+    // ---------- Run signals (async job) ----------
 
     [Fact]
-    public async Task RunSignals_ReturnsPerUserSummary()
+    public async Task RunSignals_StartsJobAndCompletes()
     {
         var response = await _client.PostAsync("/api/v1/admin/run-signals", null);
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var envelope = await response.Content.ReadFromJsonAsync<TestEnvelope<string>>();
-        envelope!.Data.Should().Contain("0 failures");
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var envelope = await response.Content.ReadFromJsonAsync<TestEnvelope<SignalJobDto>>();
+        envelope!.Data!.Status.Should().Be("RUNNING");
+        var jobId = envelope.Data.JobId;
+
+        // Poll until the background job leaves RUNNING (empty settings -> fast).
+        SignalJobDto? job = null;
+        for (var i = 0; i < 20; i++)
+        {
+            var status = await _client.GetAsync($"/api/v1/admin/run-signals/{jobId}");
+            status.StatusCode.Should().Be(HttpStatusCode.OK);
+            var statusEnvelope = await status.Content.ReadFromJsonAsync<TestEnvelope<SignalJobDto>>();
+            job = statusEnvelope!.Data!;
+            if (job.Status != "RUNNING") break;
+            await Task.Delay(250);
+        }
+
+        job!.Status.Should().Be("SUCCEEDED");
+        job.Message.Should().Contain("0 failures");
     }
 }

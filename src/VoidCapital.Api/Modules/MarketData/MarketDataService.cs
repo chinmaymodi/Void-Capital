@@ -45,6 +45,15 @@ public class MarketDataService : IMarketDataService
         return price;
     }
 
+    public async Task<decimal> GetCurrentPriceFreshAsync(string symbol)
+    {
+        // D3: no cache read, no cache write -- the caller (signal resolution)
+        // needs the DB's latest quote, not a quote that may predate the
+        // refresh that just ran in the same daily cycle.
+        return await _repo.GetLatestPriceAsync(symbol)
+            ?? throw new NotFoundException($"No market data for symbol '{symbol}'");
+    }
+
     public Task<IEnumerable<StockPrice>> GetPriceHistoryAsync(string symbol, DateOnly from, DateOnly to) =>
         _repo.GetPriceHistoryAsync(symbol, from, to);
 }

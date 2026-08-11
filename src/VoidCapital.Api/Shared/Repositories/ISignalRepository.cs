@@ -8,6 +8,9 @@ public interface ISignalRepository
 {
     Task<Signal?> GetByIdAsync(int id);
     Task<IEnumerable<Signal>> GetTodaySignalsAsync(int userId);
+
+    /// <summary>All signals recorded for a given date (any user, any status).</summary>
+    Task<IEnumerable<Signal>> GetAllSignalsOnDateAsync(DateOnly date);
     Task<Signal> AddAsync(Signal signal);
     Task UpdateAsync(Signal signal);
 

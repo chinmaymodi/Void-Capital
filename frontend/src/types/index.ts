@@ -9,6 +9,11 @@ export interface ApiResponse<T> {
   traceId: string | null;
 }
 
+export interface User {
+  id: number;
+  name: string;
+}
+
 export interface PortfolioState {
   cash: number;
   holdingsValue: number;
@@ -189,4 +194,14 @@ export interface SquareOffResult {
   positionsSold: number;
   proceeds: number;
   remainingCash: number;
+}
+
+export type SignalJobStatus = 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+
+export interface SignalJob {
+  jobId: number;
+  status: SignalJobStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  message: string | null;
 }

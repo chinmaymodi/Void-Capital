@@ -4,17 +4,28 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Dashboard from '../pages/Dashboard';
-import { getPortfolio, getPortfolioHistory } from '../services/api';
+import { UserProvider } from '../context/UserProvider';
+import { getPortfolio, getPortfolioHistory, getUsers } from '../services/api';
 
 vi.mock('../services/api');
 
 const mockedGetPortfolio = vi.mocked(getPortfolio);
 const mockedGetHistory = vi.mocked(getPortfolioHistory);
+const mockedGetUsers = vi.mocked(getUsers);
+
+function renderPage() {
+  return render(
+    <UserProvider>
+      <Dashboard />
+    </UserProvider>,
+  );
+}
 
 describe('Dashboard', () => {
   beforeEach(() => {
     mockedGetPortfolio.mockReset();
     mockedGetHistory.mockReset();
+    mockedGetUsers.mockResolvedValue([{ id: 1, name: 'Trader One' }]);
   });
 
   afterEach(() => {
@@ -25,7 +36,7 @@ describe('Dashboard', () => {
     mockedGetPortfolio.mockImplementation(() => new Promise(() => {}));
     mockedGetHistory.mockImplementation(() => new Promise(() => {}));
 
-    render(<Dashboard />);
+    renderPage();
     expect(screen.getByTestId('spinner')).toBeInTheDocument();
   });
 
@@ -37,7 +48,7 @@ describe('Dashboard', () => {
     });
     mockedGetHistory.mockResolvedValue([]);
 
-    render(<Dashboard />);
+    renderPage();
 
     expect(await screen.findByText('Cash')).toBeInTheDocument();
     expect(screen.getByText('Holdings')).toBeInTheDocument();
@@ -52,7 +63,7 @@ describe('Dashboard', () => {
     });
     mockedGetHistory.mockResolvedValue([]);
 
-    render(<Dashboard />);
+    renderPage();
 
     expect(
       await screen.findByText(/No portfolio history recorded yet/i),
@@ -69,7 +80,7 @@ describe('Dashboard', () => {
     });
     mockedGetHistory.mockResolvedValue([]);
 
-    render(<Dashboard />);
+    renderPage();
 
     expect(await screen.findByText('Network down')).toBeInTheDocument();
 

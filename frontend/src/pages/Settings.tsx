@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useToast } from '../components/useToast';
 import { ErrorState, Spinner } from '../components/ui';
+import { useUser } from '../context/useUser';
 import { getSettings, updateSettings } from '../services/api';
 import type { Settings } from '../types';
 
@@ -14,15 +15,16 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [newSymbol, setNewSymbol] = useState('');
   const { showError, showSuccess } = useToast();
+  const { currentUserId } = useUser();
 
   const fetchData = useCallback(() => {
     setLoading(true);
     setError(null);
-    getSettings()
+    getSettings(currentUserId)
       .then(setSettings)
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load settings'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [currentUserId]);
 
   useEffect(() => {
     fetchData();
@@ -47,7 +49,7 @@ export function SettingsPage() {
     if (!settings) return;
     setSaving(true);
     try {
-      const updated = await updateSettings(settings);
+      const updated = await updateSettings(settings, currentUserId);
       setSettings(updated);
       showSuccess('Settings saved');
     } catch (err) {

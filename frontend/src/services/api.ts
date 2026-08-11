@@ -16,11 +16,13 @@ import type {
   Settings,
   Signal,
   SignalBatchResult,
+  SignalJob,
   SquareOffResult,
   StockPrice,
   Trade,
   TradeFilters,
   TradeRequest,
+  User,
 } from '../types';
 
 const api = axios.create({
@@ -61,7 +63,11 @@ async function unwrap<T>(request: Promise<{ data: ApiResponse<T> }>): Promise<T>
   return data.data;
 }
 
-const USER_ID = 1; // Trader One (demo). User picker is a later ticket.
+const USER_ID = 1; // Trader One (demo). Fallback when no user is selected.
+
+export function getUsers(): Promise<User[]> {
+  return unwrap(api.get<ApiResponse<User[]>>(`/users`));
+}
 
 export function getPortfolio(userId: number = USER_ID): Promise<PortfolioState> {
   return unwrap(api.get<ApiResponse<PortfolioState>>(`/portfolio/${userId}`));
@@ -112,13 +118,13 @@ export function getTrades(filters: TradeFilters = {}, userId: number = USER_ID):
   );
 }
 
-export function getSettings(): Promise<Settings> {
-  return unwrap(api.get<ApiResponse<Settings>>(`/settings/${USER_ID}`));
+export function getSettings(userId: number = USER_ID): Promise<Settings> {
+  return unwrap(api.get<ApiResponse<Settings>>(`/settings/${userId}`));
 }
 
-export function updateSettings(settings: Settings): Promise<Settings> {
+export function updateSettings(settings: Settings, userId: number = USER_ID): Promise<Settings> {
   return unwrap(
-    api.put<ApiResponse<Settings>>(`/settings/${USER_ID}`, {
+    api.put<ApiResponse<Settings>>(`/settings/${userId}`, {
       autoExecute: settings.autoExecute,
       minConfidence: settings.minConfidence,
       negativeLimit: settings.negativeLimit,
@@ -207,8 +213,30 @@ export function squareOff(userId: number): Promise<SquareOffResult> {
   return unwrap(api.post<ApiResponse<SquareOffResult>>(`/admin/square-off/${userId}`));
 }
 
-export function runSignalGeneration(): Promise<string> {
-  return unwrap(api.post<ApiResponse<string>>(`/admin/run-signals`));
+export function runSignalGeneration(): Promise<SignalJob> {
+  return unwrap(api.post<ApiResponse<SignalJob>>(`/admin/run-signals`));
+}
+
+export function getSignalJobStatus(jobId: number): Promise<SignalJob> {
+  return unwrap(api.get<ApiResponse<SignalJob>>(`/admin/run-signals/${jobId}`));
+}
+
+/**
+ * Kicks off signal generation and polls until the job leaves RUNNING.
+ * Signal generation runs as a background job (the Python pipeline takes
+ * minutes, beyond the 15s axios timeout), so the POST returns a job id
+ * immediately and this helper polls the status endpoint every 2.5s.
+ */
+export async function runSignalGenerationAndWait(
+  onStatus?: (job: SignalJob) => void,
+): Promise<SignalJob> {
+  const job = await runSignalGeneration();
+  for (;;) {
+    const current = await getSignalJobStatus(job.jobId);
+    onStatus?.(current);
+    if (current.status !== 'RUNNING') return current;
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+  }
 }
 
 export default api;

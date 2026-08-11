@@ -14,7 +14,8 @@ public class PythonBridge : IPythonBridge
         _settings = options.Value;
     }
 
-    public async Task<PythonRunResult> RunSignalGeneration(int userId, bool noGate)
+    public async Task<PythonRunResult> RunSignalGeneration(
+        int userId, bool noGate, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_settings.PythonPath) ||
             string.IsNullOrWhiteSpace(_settings.ScriptPath))
@@ -23,7 +24,20 @@ public class PythonBridge : IPythonBridge
         }
 
         var arguments = $"\"{_settings.ScriptPath}\" --user {userId} {(noGate ? "--no-gate" : "")}";
-        var (exitCode, output, error) = await _runner.RunAsync(_settings.PythonPath, arguments);
+        var (exitCode, output, error) = await _runner.RunAsync(_settings.PythonPath, arguments, ct);
+        return new PythonRunResult(exitCode == 0, output, error);
+    }
+
+    public async Task<PythonRunResult> RunDataRefreshAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_settings.PythonPath) ||
+            string.IsNullOrWhiteSpace(_settings.RefreshScriptPath))
+        {
+            return new PythonRunResult(false, "", "Python bridge is not configured (Python:PythonPath / Python:RefreshScriptPath).");
+        }
+
+        var arguments = $"\"{_settings.RefreshScriptPath}\"";
+        var (exitCode, output, error) = await _runner.RunAsync(_settings.PythonPath, arguments, ct);
         return new PythonRunResult(exitCode == 0, output, error);
     }
 }

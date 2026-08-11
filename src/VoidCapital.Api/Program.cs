@@ -91,6 +91,7 @@ try
     builder.Services.AddScoped<ISignalIntegrationService, SignalIntegrationService>();
     builder.Services.AddScoped<ICycleRunRepository, CycleRunRepository>();
     builder.Services.AddScoped<IDailyCycleRunner, DailyCycleRunner>();
+    builder.Services.AddSingleton<ISignalJobService, SignalJobService>();
     builder.Services.AddHostedService<DailyCycleService>();
 
     var app = builder.Build();

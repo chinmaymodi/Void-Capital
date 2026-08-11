@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { EmptyState, ErrorState, Spinner } from '../components/ui';
 import { useToast } from '../components/useToast';
+import { useUser } from '../context/useUser';
 import { buyStock, getHoldings, sellStock } from '../services/api';
 import type { Holding, TradeType } from '../types';
 
@@ -33,15 +34,16 @@ export function Holdings() {
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [modal, setModal] = useState<{ symbol: string; type: TradeType } | null>(null);
   const { showError, showSuccess } = useToast();
+  const { currentUserId } = useUser();
 
   const fetchData = useCallback(() => {
     setLoading(true);
     setError(null);
-    getHoldings()
+    getHoldings(currentUserId)
       .then(setHoldings)
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load holdings'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [currentUserId]);
 
   useEffect(() => {
     fetchData();
@@ -71,8 +73,8 @@ export function Holdings() {
       try {
         const trade =
           type === 'BUY'
-            ? await buyStock({ symbol, shares })
-            : await sellStock({ symbol, shares });
+            ? await buyStock({ symbol, shares }, currentUserId)
+            : await sellStock({ symbol, shares }, currentUserId);
         showSuccess(`${type} ${shares} ${symbol} @ ${currency.format(trade.price)}`);
         setModal(null);
         fetchData();
@@ -80,7 +82,7 @@ export function Holdings() {
         showError(err instanceof Error ? err.message : 'Trade failed');
       }
     },
-    [fetchData, showError, showSuccess],
+    [fetchData, showError, showSuccess, currentUserId],
   );
 
   if (loading) return <Spinner />;

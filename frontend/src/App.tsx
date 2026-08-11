@@ -5,6 +5,7 @@ import { lazy, Suspense } from 'react';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { ToastProvider } from './components/Toast';
+import { UserProvider } from './context/UserProvider';
 import { Spinner } from './components/ui';
 import Placeholder from './pages/Placeholder';
 
@@ -22,22 +23,24 @@ function App() {
   return (
     <BrowserRouter>
       <ToastProvider>
-        <Suspense fallback={<Spinner />}>
-          <Routes>
-            <Route element={<Layout />}>
-              <Route index element={<Dashboard />} />
-              <Route path="holdings" element={<Holdings />} />
-              <Route path="trades" element={<Trades />} />
-              <Route path="signals" element={<Signals />} />
-              <Route path="system" element={<SystemPortfolio />} />
-              <Route path="compare" element={<Compare />} />
-              <Route path="performance" element={<SignalPerformance />} />
-              <Route path="admin" element={<Admin />} />
-              <Route path="settings" element={<SettingsPage />} />
-              <Route path="*" element={<Placeholder title="Not Found" />} />
-            </Route>
-          </Routes>
-        </Suspense>
+        <UserProvider>
+          <Suspense fallback={<Spinner />}>
+            <Routes>
+              <Route element={<Layout />}>
+                <Route index element={<Dashboard />} />
+                <Route path="holdings" element={<Holdings />} />
+                <Route path="trades" element={<Trades />} />
+                <Route path="signals" element={<Signals />} />
+                <Route path="system" element={<SystemPortfolio />} />
+                <Route path="compare" element={<Compare />} />
+                <Route path="performance" element={<SignalPerformance />} />
+                <Route path="admin" element={<Admin />} />
+                <Route path="settings" element={<SettingsPage />} />
+                <Route path="*" element={<Placeholder title="Not Found" />} />
+              </Route>
+            </Routes>
+          </Suspense>
+        </UserProvider>
       </ToastProvider>
     </BrowserRouter>
   );

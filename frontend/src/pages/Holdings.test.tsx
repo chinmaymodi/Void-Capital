@@ -5,7 +5,8 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Holdings from '../pages/Holdings';
-import { buyStock, getHoldings, sellStock } from '../services/api';
+import { UserProvider } from '../context/UserProvider';
+import { buyStock, getHoldings, getUsers, sellStock } from '../services/api';
 import { ToastProvider } from '../components/Toast';
 
 vi.mock('../services/api');
@@ -13,6 +14,7 @@ vi.mock('../services/api');
 const mockedGetHoldings = vi.mocked(getHoldings);
 const mockedBuy = vi.mocked(buyStock);
 const mockedSell = vi.mocked(sellStock);
+const mockedGetUsers = vi.mocked(getUsers);
 
 const sampleHoldings = [
   {
@@ -38,7 +40,9 @@ const sampleHoldings = [
 function renderHoldings() {
   return render(
     <ToastProvider>
-      <Holdings />
+      <UserProvider>
+        <Holdings />
+      </UserProvider>
     </ToastProvider>,
   );
 }
@@ -48,6 +52,7 @@ describe('Holdings', () => {
     mockedGetHoldings.mockReset();
     mockedBuy.mockReset();
     mockedSell.mockReset();
+    mockedGetUsers.mockResolvedValue([{ id: 1, name: 'Trader One' }]);
   });
 
   afterEach(() => {
@@ -114,7 +119,7 @@ describe('Holdings', () => {
     await user.click(within(dialog).getByTestId('submit-trade'));
 
     await waitFor(() => {
-      expect(mockedBuy).toHaveBeenCalledWith({ symbol: 'RELIANCE', shares: 5 });
+      expect(mockedBuy).toHaveBeenCalledWith({ symbol: 'RELIANCE', shares: 5 }, 1);
     });
     expect(mockedGetHoldings).toHaveBeenCalledTimes(2); // initial + refresh
   });
