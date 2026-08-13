@@ -1,11 +1,13 @@
-// Admin page (D7.2): signal generation control, per-system-user portfolio
-// limits config, global settings, and manual square-off with confirmation.
-// run-signals runs as a background job (the Python pipeline takes minutes);
-// the page polls the job status until it completes.
+// Admin page (D7.2): signal generation control, per-agent portfolio limits
+// config, global settings, and manual square-off with confirmation. The agent
+// list derives from GET /users (all users except the demo human) so newly
+// seeded agents appear automatically. run-signals runs as a background job
+// (the Python pipeline takes minutes); the page polls until it completes.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useToast } from '../components/useToast';
 import { ErrorState, Spinner, StatCard } from '../components/ui';
+import { useUser } from '../context/useUser';
 import {
   getAdminSettings,
   getAdminStatus,
@@ -14,12 +16,8 @@ import {
   updateAdminSettings,
   updateGlobalSettings,
 } from '../services/api';
+import { USER_ID } from '../services/api';
 import type { AdminStatus, Settings, SquareOffResult } from '../types';
-
-const CONFIG_USERS = [
-  { userId: 2, label: 'System Portfolio' },
-  { userId: 3, label: 'System-Reckless' },
-];
 
 const currency = new Intl.NumberFormat('en-IN', {
   style: 'currency',
@@ -28,6 +26,17 @@ const currency = new Intl.NumberFormat('en-IN', {
 });
 
 export function Admin() {
+  const { users } = useUser();
+  // Agents = every user except the demo human. Derived from the API roster so
+  // newly seeded agents show up automatically.
+  const agents = useMemo(
+    () => [...users].filter((u) => u.id !== USER_ID).sort((a, b) => a.id - b.id),
+    [users],
+  );
+  const agentLabel = useCallback(
+    (userId: number) => agents.find((u) => u.id === userId)?.name ?? `User ${userId}`,
+    [agents],
+  );
   const [status, setStatus] = useState<AdminStatus | null>(null);
   const [configs, setConfigs] = useState<Record<number, Settings>>({});
   const [minConfidence, setMinConfidence] = useState('0.50');
@@ -48,7 +57,7 @@ export function Admin() {
     setError(null);
     Promise.all([
       getAdminStatus(),
-      ...CONFIG_USERS.map((u) => getAdminSettings(u.userId)),
+      ...agents.map((u) => getAdminSettings(u.id)),
     ])
       .then(([st, ...cfg]) => {
         setStatus(st);
@@ -60,7 +69,7 @@ export function Admin() {
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load admin data'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [agents]);
 
   useEffect(() => {
     fetchData();
@@ -98,7 +107,7 @@ export function Admin() {
     try {
       const updated = await updateAdminSettings(userId, config);
       setConfigs((current) => ({ ...current, [userId]: updated }));
-      showSuccess(`Saved ${CONFIG_USERS.find((u) => u.userId === userId)?.label} config`);
+      showSuccess(`Saved ${agentLabel(userId)} config`);
     } catch (err) {
       showError(err instanceof Error ? err.message : 'Failed to save config');
     } finally {
@@ -197,12 +206,12 @@ export function Admin() {
 
       <section className="card admin-section">
         <h2>Portfolio Limits Configuration</h2>
-        {CONFIG_USERS.map((u) => {
-          const config = configs[u.userId];
+        {agents.map((u) => {
+          const config = configs[u.id];
           if (!config) return null;
           return (
-            <div key={u.userId} className="admin-config-block" data-testid={`config-${u.userId}`}>
-              <h3>{u.label} (user_id={u.userId})</h3>
+            <div key={u.id} className="admin-config-block" data-testid={`config-${u.id}`}>
+              <h3>{u.name} (user_id={u.id})</h3>
               <label className="toggle-row">
                 <span>
                   Auto-execute
@@ -211,8 +220,8 @@ export function Admin() {
                 <input
                   type="checkbox"
                   checked={config.autoExecute}
-                  onChange={(e) => setConfigField(u.userId, { autoExecute: e.target.checked })}
-                  data-testid={`auto-execute-${u.userId}`}
+                  onChange={(e) => setConfigField(u.id, { autoExecute: e.target.checked })}
+                  data-testid={`auto-execute-${u.id}`}
                 />
               </label>
               <div className="config-fields">
@@ -223,8 +232,8 @@ export function Admin() {
                     min="0"
                     step="1000"
                     value={config.negativeLimit}
-                    onChange={(e) => setConfigField(u.userId, { negativeLimit: Number(e.target.value) })}
-                    data-testid={`negative-limit-${u.userId}`}
+                    onChange={(e) => setConfigField(u.id, { negativeLimit: Number(e.target.value) })}
+                    data-testid={`negative-limit-${u.id}`}
                   />
                 </label>
                 <label className="field">
@@ -234,8 +243,8 @@ export function Admin() {
                     min="0"
                     step="0.0001"
                     value={config.interestRate}
-                    onChange={(e) => setConfigField(u.userId, { interestRate: Number(e.target.value) })}
-                    data-testid={`interest-rate-${u.userId}`}
+                    onChange={(e) => setConfigField(u.id, { interestRate: Number(e.target.value) })}
+                    data-testid={`interest-rate-${u.id}`}
                   />
                 </label>
               </div>
@@ -243,22 +252,20 @@ export function Admin() {
                 <button
                   type="button"
                   className="btn btn-primary"
-                  onClick={() => saveUserConfig(u.userId)}
-                  disabled={saving[u.userId]}
-                  data-testid={`save-config-${u.userId}`}
+                  onClick={() => saveUserConfig(u.id)}
+                  disabled={saving[u.id]}
+                  data-testid={`save-config-${u.id}`}
                 >
-                  {saving[u.userId] ? 'Saving...' : 'Save'}
+                  {saving[u.id] ? 'Saving...' : 'Save'}
                 </button>
-                {u.userId === 3 && (
-                  <button
-                    type="button"
-                    className="btn btn-sell"
-                    onClick={() => confirmSquareOff(config)}
-                    data-testid="square-off-reckless"
-                  >
-                    Square Off Reckless
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="btn btn-sell"
+                  onClick={() => confirmSquareOff(config)}
+                  data-testid={`square-off-${u.id}`}
+                >
+                  Square Off {u.name}
+                </button>
               </div>
             </div>
           );
@@ -308,7 +315,7 @@ export function Admin() {
         <div className="modal-overlay" data-testid="square-off-confirm">
           <div className="modal">
             <h2>
-              {squareOffResult ? 'Square Off Complete' : `Square Off ${CONFIG_USERS.find((u) => u.userId === squareOffTarget.userId)?.label}?`}
+              {squareOffResult ? 'Square Off Complete' : `Square Off ${agentLabel(squareOffTarget.userId)}?`}
             </h2>
             {squareOffResult ? (
               <p className="modal-hint" data-testid="square-off-result">

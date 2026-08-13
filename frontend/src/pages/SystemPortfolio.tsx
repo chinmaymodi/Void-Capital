@@ -1,12 +1,15 @@
-// System Portfolio page: view either automated portfolio (System user_id=2,
-// System-Reckless user_id=3) side by side. Header stats, holdings table,
-// recent trade log, resolved-signal log (model filterable), and an overlay
-// chart of both system users' portfolio value over time.
+// System Portfolio page: view any automated (agent) portfolio side by side.
+// Header stats, holdings table, recent trade log, resolved-signal log (model
+// filterable), and an overlay chart of all agents' portfolio value over time.
+// The agent list derives from GET /users (all users except the demo human) so
+// newly seeded agents appear automatically.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useToast } from '../components/useToast';
 import { EmptyState, ErrorState, Spinner } from '../components/ui';
+import { useUser } from '../context/useUser';
+import { CHART_COLORS } from '../constants/chartColors';
 import {
   getAdminSettings,
   getComparison,
@@ -15,6 +18,7 @@ import {
   getResolvedSignals,
   getTrades,
 } from '../services/api';
+import { USER_ID } from '../services/api';
 import type {
   ComparisonPortfolio,
   Holding,
@@ -23,11 +27,6 @@ import type {
   PnlSnapshot,
   Settings,
 } from '../types';
-
-const SYSTEM_USERS = [
-  { userId: 2, label: 'System Portfolio' },
-  { userId: 3, label: 'System-Reckless' },
-];
 
 const currency = new Intl.NumberFormat('en-IN', {
   style: 'currency',
@@ -51,16 +50,20 @@ const OUTCOME_LABEL: Record<string, string> = {
 };
 
 export function SystemPortfolio() {
+  const { users } = useUser();
+  // Agents = every user except the demo human. Derived from the API roster so
+  // newly seeded agents show up automatically.
+  const agents = useMemo(
+    () => [...users].filter((u) => u.id !== USER_ID).sort((a, b) => a.id - b.id),
+    [users],
+  );
   const [userId, setUserId] = useState(2);
   const [comparison, setComparison] = useState<ComparisonPortfolio | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [trades, setTrades] = useState<PagedTrades | null>(null);
   const [resolved, setResolved] = useState<PagedResolvedSignals | null>(null);
-  const [histories, setHistories] = useState<{ user2: PnlSnapshot[]; user3: PnlSnapshot[] }>({
-    user2: [],
-    user3: [],
-  });
+  const [histories, setHistories] = useState<Record<number, PnlSnapshot[]>>({});
   const [modelFilter, setModelFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -90,14 +93,21 @@ export function SystemPortfolio() {
     [],
   );
 
-  // Fetch both users' history once for the overlay chart.
+  // Fetch every agent's history once for the overlay chart.
   useEffect(() => {
-    Promise.all([getPortfolioHistory(2), getPortfolioHistory(3)])
-      .then(([h2, h3]) => setHistories({ user2: h2, user3: h3 }))
+    if (agents.length === 0) return;
+    Promise.all(agents.map((a) => getPortfolioHistory(a.userId)))
+      .then((all) => {
+        const map: Record<number, PnlSnapshot[]> = {};
+        agents.forEach((a, i) => {
+          map[a.userId] = all[i];
+        });
+        setHistories(map);
+      })
       .catch(() => {
         /* chart data is optional; page body handles its own errors */
       });
-  }, []);
+  }, [agents]);
 
   useEffect(() => {
     fetchUserData(userId);
@@ -111,18 +121,16 @@ export function SystemPortfolio() {
   };
 
   const chartData = useCallback(() => {
-    const byDate = new Map<string, { date: string; user2?: number; user3?: number }>();
-    const add = (snaps: PnlSnapshot[], key: 'user2' | 'user3') => {
-      for (const s of snaps) {
+    const byDate = new Map<string, Record<string, number | undefined>>();
+    for (const a of agents) {
+      for (const s of histories[a.userId] ?? []) {
         const row = byDate.get(s.date) ?? { date: s.date };
-        row[key] = s.portfolioValue;
+        row[`user${a.userId}`] = s.portfolioValue;
         byDate.set(s.date, row);
       }
-    };
-    add(histories.user2, 'user2');
-    add(histories.user3, 'user3');
+    }
     return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
-  }, [histories]);
+  }, [histories, agents]);
 
   if (loading && !comparison) return <Spinner />;
   if (error && !comparison) return <ErrorState message={error} onRetry={() => fetchUserData(userId)} />;
@@ -134,15 +142,15 @@ export function SystemPortfolio() {
       <div className="page-header">
         <h1>System Portfolio</h1>
         <div className="segmented" data-testid="system-user-selector">
-          {SYSTEM_USERS.map((u) => (
+          {agents.map((u) => (
             <button
-              key={u.userId}
+              key={u.id}
               type="button"
-              className={`segmented-btn${userId === u.userId ? ' active' : ''}`}
-              onClick={() => setUserId(u.userId)}
-              data-testid={`system-tab-${u.userId}`}
+              className={`segmented-btn${userId === u.id ? ' active' : ''}`}
+              onClick={() => setUserId(u.id)}
+              data-testid={`system-tab-${u.id}`}
             >
-              {u.label}
+              {u.name}
             </button>
           ))}
         </div>
@@ -179,7 +187,7 @@ export function SystemPortfolio() {
 
           <section className="card chart-card">
             <h2>Portfolio Value Over Time</h2>
-            {histories.user2.length === 0 && histories.user3.length === 0 ? (
+            {agents.every((a) => (histories[a.userId]?.length ?? 0) === 0) ? (
               <EmptyState message="No portfolio history recorded yet (daily snapshots start once scheduled)" />
             ) : (
               <div className="chart" data-testid="system-chart">
@@ -193,22 +201,17 @@ export function SystemPortfolio() {
                       domain={['auto', 'auto']}
                     />
                     <Tooltip labelStyle={{ fontSize: 12 }} />
-                    <Line
-                      type="monotone"
-                      dataKey="user2"
-                      name="System"
-                      stroke="#4f8ef7"
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="user3"
-                      name="System-Reckless"
-                      stroke="#e8a13a"
-                      strokeWidth={2}
-                      dot={false}
-                    />
+                    {agents.map((a, i) => (
+                      <Line
+                        key={a.id}
+                        type="monotone"
+                        dataKey={`user${a.id}`}
+                        name={a.name}
+                        stroke={CHART_COLORS[i % CHART_COLORS.length]}
+                        strokeWidth={2}
+                        dot={false}
+                      />
+                    ))}
                   </LineChart>
                 </ResponsiveContainer>
               </div>

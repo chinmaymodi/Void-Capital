@@ -37,6 +37,9 @@ export interface Holding {
   currentPrice: number;
   unrealizedPnl: number;
   percentOfPortfolio: number;
+  instrumentType?: string;
+  expiry?: string | null;
+  strike?: number | null;
 }
 
 export type TradeType = 'BUY' | 'SELL';
@@ -109,6 +112,9 @@ export interface Signal {
   targetPrice: number | null;
   stopLoss: number | null;
   failureReason: string | null;
+  instrumentType?: string;
+  expiry?: string | null;
+  strike?: number | null;
 }
 
 export interface SignalBatchResult {

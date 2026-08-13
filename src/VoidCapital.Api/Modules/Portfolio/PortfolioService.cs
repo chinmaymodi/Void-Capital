@@ -92,7 +92,7 @@ public class PortfolioService : IPortfolioService
         var dtos = new List<HoldingDto>();
         foreach (var holding in holdings)
         {
-            var currentPrice = await _marketData.GetCurrentPriceAsync(holding.Symbol);
+            var currentPrice = await GetHoldingPriceAsync(holding);
             var marketValue = currentPrice * holding.Quantity;
             var unrealizedPnl = (currentPrice - holding.AvgPrice) * holding.Quantity;
 
@@ -103,7 +103,10 @@ public class PortfolioService : IPortfolioService
                 holding.AvgPrice,
                 currentPrice,
                 unrealizedPnl,
-                totalValue > 0 ? marketValue / totalValue : 0));
+                totalValue > 0 ? marketValue / totalValue : 0,
+                holding.InstrumentType,
+                holding.Expiry,
+                holding.Strike));
         }
 
         return dtos;
@@ -197,6 +200,105 @@ public class PortfolioService : IPortfolioService
         return trade;
     }
 
+    public async Task<Trade> ExecuteOptionsBuyAsync(int userId, string symbol, string optType,
+        DateOnly expiry, decimal strike, int quantity, decimal premium)
+    {
+        if (quantity <= 0)
+            throw new ValidationException("Option quantity must be greater than zero.");
+
+        symbol = NormalizeSymbol(symbol);
+        optType = NormalizeSymbol(optType);
+        var user = await GetUserOrThrowAsync(userId);
+        var negativeLimit = await GetNegativeLimitAsync(userId);
+
+        if (premium <= 0)
+            throw new ValidationException($"Cannot buy {symbol} {optType} at premium {premium}.");
+
+        // Options are cash instruments: the cost basis is the premium paid
+        // (sizing.py already capped at 10% of cash per idea, whole lots).
+        if (!CanBuy(user, premium, quantity, negativeLimit))
+            throw new InsufficientFundsException(
+                $"Insufficient cash to buy {quantity} {symbol} {optType} {expiry} "
+                + $"strike {strike} at premium {premium} (cost {premium * quantity}, "
+                + $"cash {user.CurrentCash}).");
+
+        var cost = premium * quantity;
+        await _userRepo.UpdateCashAsync(userId, user.CurrentCash - cost);
+        await UpsertHoldingAsync(userId, symbol, quantity, premium, optType, expiry, strike);
+
+        var trade = new Trade
+        {
+            UserId = userId,
+            InstrumentType = optType,
+            Symbol = symbol,
+            Expiry = expiry,
+            Strike = strike,
+            Type = "BUY",
+            Quantity = quantity,
+            Price = premium,
+            TotalValue = cost,
+            Reason = "Options signal",
+            Timestamp = DateTime.UtcNow
+        };
+        await _tradeRepo.AddAsync(trade);
+        return trade;
+    }
+
+    public async Task<Trade> ExecuteOptionsSellAsync(int userId, string symbol, string optType,
+        DateOnly expiry, decimal strike, int quantity)
+    {
+        if (quantity <= 0)
+            throw new ValidationException("Option quantity must be greater than zero.");
+
+        symbol = NormalizeSymbol(symbol);
+        optType = NormalizeSymbol(optType);
+        var user = await GetUserOrThrowAsync(userId);
+        var holding = await _holdingRepo.GetByInstrumentAsync(
+            userId, optType, symbol, expiry, strike);
+
+        if (holding is null)
+            throw new ValidationException(
+                $"No holding of {symbol} {optType} {expiry} strike {strike} to sell.");
+
+        if (!CanSell(holding, quantity))
+            throw new ValidationException(
+                $"Cannot sell {quantity} {symbol} {optType}; you hold {holding.Quantity}.");
+
+        // Exit prices at the current settle premium (fo_options latest).
+        var price = await _marketData.GetOptionPriceAsync(symbol, expiry, strike, optType);
+        var proceeds = price * quantity;
+
+        await _userRepo.UpdateCashAsync(userId, user.CurrentCash + proceeds);
+
+        var remaining = holding.Quantity - quantity;
+        if (remaining == 0)
+        {
+            await _holdingRepo.DeleteAsync(holding.Id);
+        }
+        else
+        {
+            holding.Quantity = remaining;
+            await _holdingRepo.UpdateAsync(holding);
+        }
+
+        var trade = new Trade
+        {
+            UserId = userId,
+            InstrumentType = optType,
+            Symbol = symbol,
+            Expiry = expiry,
+            Strike = strike,
+            Type = "SELL",
+            Quantity = quantity,
+            Price = price,
+            TotalValue = proceeds,
+            Reason = "Options signal",
+            Timestamp = DateTime.UtcNow
+        };
+        await _tradeRepo.AddAsync(trade);
+        return trade;
+    }
+
     public async Task RecordDailySnapshotAsync(int userId)
     {
         var state = await GetPortfolioStateAsync(userId);
@@ -228,21 +330,53 @@ public class PortfolioService : IPortfolioService
         decimal total = 0;
         foreach (var holding in holdings)
         {
-            var price = await _marketData.GetCurrentPriceAsync(holding.Symbol);
+            var price = await GetHoldingPriceAsync(holding);
             total += price * holding.Quantity;
         }
         return total;
     }
 
-    private async Task UpsertHoldingAsync(int userId, string symbol, int shares, decimal price)
+    /// <summary>
+    /// Price one holding: options by their contract settle (fo_options),
+    /// equities by the stock quote. Options with no observable settle value
+    /// at zero (expired/worthless contracts).
+    /// </summary>
+    private async Task<decimal> GetHoldingPriceAsync(Holding holding)
     {
-        var existing = await _holdingRepo.GetAsync(userId, symbol);
+        if (holding.InstrumentType == "EQ")
+            return await _marketData.GetCurrentPriceAsync(holding.Symbol);
+
+        if (holding.Expiry is null || holding.Strike is null)
+            return 0m;
+
+        try
+        {
+            return await _marketData.GetOptionPriceAsync(
+                holding.Symbol, holding.Expiry.Value, holding.Strike.Value, holding.InstrumentType);
+        }
+        catch (NotFoundException)
+        {
+            // Contract has no settle (expired or data gap): worth zero.
+            return 0m;
+        }
+    }
+
+    private async Task UpsertHoldingAsync(int userId, string symbol, int shares, decimal price,
+        string instrumentType = "EQ", DateOnly? expiry = null, decimal? strike = null)
+    {
+        var existing = instrumentType == "EQ"
+            ? await _holdingRepo.GetAsync(userId, symbol)
+            : await _holdingRepo.GetByInstrumentAsync(userId, instrumentType, symbol, expiry, strike);
+
         if (existing is null)
         {
             await _holdingRepo.AddAsync(new Holding
             {
                 UserId = userId,
+                InstrumentType = instrumentType,
                 Symbol = symbol,
+                Expiry = expiry,
+                Strike = strike,
                 Quantity = shares,
                 AvgPrice = price,
                 BuyDate = DateOnly.FromDateTime(DateTime.UtcNow)

@@ -8,4 +8,7 @@ public record HoldingDto(
     decimal AvgBuyPrice,
     decimal CurrentPrice,
     decimal UnrealizedPnl,
-    decimal PercentOfPortfolio);
+    decimal PercentOfPortfolio,
+    string InstrumentType = "EQ",
+    DateOnly? Expiry = null,
+    decimal? Strike = null);

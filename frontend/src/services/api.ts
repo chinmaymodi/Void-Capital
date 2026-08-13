@@ -63,7 +63,7 @@ async function unwrap<T>(request: Promise<{ data: ApiResponse<T> }>): Promise<T>
   return data.data;
 }
 
-const USER_ID = 1; // Trader One (demo). Fallback when no user is selected.
+export const USER_ID = 1; // Trader One (demo human). Fallback when no user is selected.
 
 export function getUsers(): Promise<User[]> {
   return unwrap(api.get<ApiResponse<User[]>>(`/users`));

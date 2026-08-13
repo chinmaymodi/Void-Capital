@@ -3,6 +3,8 @@ namespace VoidCapital.Api.Modules.Signals.DTOs;
 /// <summary>
 /// Ingest request body for <c>POST /api/v1/admin/ingest-signals</c>. Mirrors
 /// the model_predictions columns; userId is required (400 when missing).
+/// InstrumentType defaults to "EQ" when omitted; expiry/strike are required
+/// for options instruments (CE/PE).
 /// </summary>
 public record IngestSignalRequest(
     int? UserId,
@@ -14,4 +16,7 @@ public record IngestSignalRequest(
     int? SuggestedQuantity,
     decimal? EntryPrice,
     decimal? TargetPrice,
-    decimal? StopLoss);
+    decimal? StopLoss,
+    string? InstrumentType = "EQ",
+    DateOnly? Expiry = null,
+    decimal? Strike = null);

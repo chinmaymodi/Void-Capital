@@ -64,8 +64,12 @@ public class AdminController : ControllerBase
             {
                 UserId = request.UserId.Value,
                 Date = DateOnly.FromDateTime(DateTime.UtcNow),
-                InstrumentType = "EQ",
+                InstrumentType = string.IsNullOrWhiteSpace(request.InstrumentType)
+                    ? "EQ"
+                    : request.InstrumentType.Trim().ToUpperInvariant(),
                 Symbol = request.Symbol,
+                Expiry = request.Expiry,
+                Strike = request.Strike,
                 ModelName = request.ModelName,
                 Action = request.Action,
                 Confidence = request.Confidence,
@@ -167,7 +171,18 @@ public class AdminController : ControllerBase
 
         foreach (var holding in holdings)
         {
-            var trade = await _portfolioService.ExecuteSellAsync(userId, holding.Symbol, holding.Quantity);
+            // D16: options holdings square off via the contract-keyed path.
+            Trade trade;
+            if (holding.InstrumentType == "EQ" || holding.Expiry is null || holding.Strike is null)
+            {
+                trade = await _portfolioService.ExecuteSellAsync(userId, holding.Symbol, holding.Quantity);
+            }
+            else
+            {
+                trade = await _portfolioService.ExecuteOptionsSellAsync(
+                    userId, holding.Symbol, holding.InstrumentType,
+                    holding.Expiry.Value, holding.Strike.Value, holding.Quantity);
+            }
             positionsSold++;
             proceeds += trade.TotalValue;
         }

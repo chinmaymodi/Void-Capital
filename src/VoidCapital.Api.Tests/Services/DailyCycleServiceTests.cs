@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Moq;
 using VoidCapital.Api.Modules.MarketData;
 using VoidCapital.Api.Modules.Portfolio;
@@ -30,6 +31,7 @@ public class DailyCycleServiceTests
     private readonly Mock<ISettingsRepository> _settingsRepo = new();
     private readonly Mock<IHoldingRepository> _holdingRepo = new();
     private readonly Mock<ICycleRunRepository> _cycleRunRepo = new();
+    private readonly Mock<IProcessRunner> _processRunner = new();
 
     public DailyCycleServiceTests()
     {
@@ -47,6 +49,8 @@ public class DailyCycleServiceTests
         _settingsRepo.Object,
         _holdingRepo.Object,
         _cycleRunRepo.Object,
+        _processRunner.Object,
+        Options.Create(new PythonSettings { NotificationScriptPath = "" }),
         NullLogger<DailyCycleRunner>.Instance);
 
     /// <summary>

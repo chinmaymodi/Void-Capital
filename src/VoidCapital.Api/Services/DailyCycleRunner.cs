@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using VoidCapital.Api.Modules.Portfolio;
 using VoidCapital.Api.Modules.Portfolio.Models;
 using VoidCapital.Api.Modules.Signals;
@@ -39,6 +40,8 @@ public class DailyCycleRunner : IDailyCycleRunner
     private readonly ISettingsRepository _settingsRepo;
     private readonly IHoldingRepository _holdingRepo;
     private readonly ICycleRunRepository _cycleRunRepo;
+    private readonly IProcessRunner _processRunner;
+    private readonly PythonSettings _pythonSettings;
     private readonly ILogger<DailyCycleRunner> _logger;
 
     public DailyCycleRunner(
@@ -52,6 +55,8 @@ public class DailyCycleRunner : IDailyCycleRunner
         ISettingsRepository settingsRepo,
         IHoldingRepository holdingRepo,
         ICycleRunRepository cycleRunRepo,
+        IProcessRunner processRunner,
+        IOptions<PythonSettings> pythonOptions,
         ILogger<DailyCycleRunner> logger)
     {
         _pythonBridge = pythonBridge;
@@ -64,12 +69,15 @@ public class DailyCycleRunner : IDailyCycleRunner
         _settingsRepo = settingsRepo;
         _holdingRepo = holdingRepo;
         _cycleRunRepo = cycleRunRepo;
+        _processRunner = processRunner;
+        _pythonSettings = pythonOptions.Value;
         _logger = logger;
     }
 
     public async Task<DailyCycleRunResult> RunAsync(CancellationToken ct = default)
     {
-        var run = new CycleRun { StartedAt = DateTime.UtcNow, Status = "RUNNING" };
+        var startedAt = DateTime.UtcNow;
+        var run = new CycleRun { StartedAt = startedAt, Status = "RUNNING" };
         run = await _cycleRunRepo.AddAsync(run);
 
         try
@@ -151,7 +159,18 @@ public class DailyCycleRunner : IDailyCycleRunner
                     var holdings = await _holdingRepo.GetByUserIdAsync(user.Id);
                     foreach (var holding in holdings)
                     {
-                        await _portfolioService.ExecuteSellAsync(user.Id, holding.Symbol, holding.Quantity);
+                        // D16: options holdings (users 4-7) square off via the
+                        // contract-keyed options path; equities via the legacy one.
+                        if (holding.InstrumentType == "EQ")
+                        {
+                            await _portfolioService.ExecuteSellAsync(user.Id, holding.Symbol, holding.Quantity);
+                        }
+                        else if (holding.Expiry is not null && holding.Strike is not null)
+                        {
+                            await _portfolioService.ExecuteOptionsSellAsync(
+                                user.Id, holding.Symbol, holding.InstrumentType,
+                                holding.Expiry.Value, holding.Strike.Value, holding.Quantity);
+                        }
                     }
                 }
             }
@@ -179,6 +198,36 @@ public class DailyCycleRunner : IDailyCycleRunner
             await _cycleRunRepo.UpdateAsync(run);
         }
 
+        // D11.2: fire-and-forget desktop notification. Optional: skipped when
+        // the script path is unset or plyer is missing. Never blocks or fails
+        // the cycle - the toast is a convenience, not a dependency.
+        var duration = (DateTime.UtcNow - startedAt).TotalSeconds;
+        await SendNotificationAsync(run.Status, duration, run.SignalsGenerated,
+                                    run.SignalsExecuted, ct);
+
         return new DailyCycleRunResult(run.Status, run.UsersProcessed, run.SignalsGenerated, run.SignalsExecuted, run.Error);
+    }
+
+    private async Task SendNotificationAsync(string status, double duration,
+                                             int signals, int trades,
+                                             CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(_pythonSettings.NotificationScriptPath))
+        {
+            return;
+        }
+
+        try
+        {
+            var arguments = $"\"{_pythonSettings.NotificationScriptPath}\" " +
+                            $"--status {status} --duration {duration:F1} " +
+                            $"--signals {signals} --trades {trades}";
+            await _processRunner.RunAsync(_pythonSettings.PythonPath, arguments,
+                                          ct, TimeSpan.FromSeconds(30));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Desktop notification skipped: {Error}", ex.Message);
+        }
     }
 }

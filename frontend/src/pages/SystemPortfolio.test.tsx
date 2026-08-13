@@ -1,11 +1,13 @@
 // SystemPortfolio page tests: user tab switching, header stats, holdings
-// table, trade log, resolution log, and model filtering. API is mocked.
+// table, trade log, resolution log, and model filtering. The agent list
+// derives from the user roster (via UserProvider -> getUsers). API is mocked.
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import SystemPortfolio from '../pages/SystemPortfolio';
 import { ToastProvider } from '../components/Toast';
+import { UserProvider } from '../context/UserProvider';
+import SystemPortfolio from '../pages/SystemPortfolio';
 import {
   getAdminSettings,
   getComparison,
@@ -13,11 +15,13 @@ import {
   getPortfolioHistory,
   getResolvedSignals,
   getTrades,
+  getUsers,
 } from '../services/api';
 import type { ComparisonPortfolio, PagedResolvedSignals, PagedTrades, Settings } from '../types';
 
 vi.mock('../services/api');
 
+const mockedGetUsers = vi.mocked(getUsers);
 const mockedGetComparison = vi.mocked(getComparison);
 const mockedGetAdminSettings = vi.mocked(getAdminSettings);
 const mockedGetHoldings = vi.mocked(getHoldings);
@@ -25,9 +29,19 @@ const mockedGetTrades = vi.mocked(getTrades);
 const mockedGetResolvedSignals = vi.mocked(getResolvedSignals);
 const mockedGetPortfolioHistory = vi.mocked(getPortfolioHistory);
 
+const sampleUsers = [
+  { id: 1, name: 'Trader One' },
+  { id: 2, name: 'System Portfolio' },
+  { id: 3, name: 'System-Reckless' },
+  { id: 4, name: 'Options-Careful' },
+  { id: 5, name: 'Options-Reckless' },
+  { id: 6, name: 'Intraday-Careful' },
+  { id: 7, name: 'Intraday-Reckless' },
+];
+
 const systemComparison: ComparisonPortfolio = {
   userId: 2,
-  name: 'System',
+  name: 'System Portfolio',
   cash: 50000,
   holdingsValue: 60000,
   totalValue: 110000,
@@ -100,6 +114,7 @@ const sampleResolved: PagedResolvedSignals = {
 };
 
 function mockDefaultResponses() {
+  mockedGetUsers.mockResolvedValue(sampleUsers);
   mockedGetComparison.mockResolvedValue({ portfolios: [systemComparison, recklessComparison], gaps: [] });
   mockedGetAdminSettings.mockResolvedValue(recklessSettings);
   mockedGetHoldings.mockResolvedValue(sampleHoldings);
@@ -111,7 +126,9 @@ function mockDefaultResponses() {
 function renderPage() {
   return render(
     <ToastProvider>
-      <SystemPortfolio />
+      <UserProvider>
+        <SystemPortfolio />
+      </UserProvider>
     </ToastProvider>,
   );
 }
@@ -132,8 +149,10 @@ describe('SystemPortfolio', () => {
     expect(await screen.findByText('Starting Budget')).toBeInTheDocument();
     // comparison for user 2: totalValue 110000, totalReturn 10000 -> budget 100000
     expect(screen.getAllByText('₹1,00,000').length).toBeGreaterThanOrEqual(1);
+    // one tab per agent (all users except the demo human)
     expect(screen.getByTestId('system-tab-2')).toBeInTheDocument();
     expect(screen.getByTestId('system-tab-3')).toBeInTheDocument();
+    expect(screen.getByTestId('system-tab-7')).toBeInTheDocument();
     expect(screen.getByTestId('system-holdings-table')).toBeInTheDocument();
   });
 
@@ -195,7 +214,7 @@ describe('SystemPortfolio', () => {
     });
   });
 
-  it('shows error state when comparison fetch fails', async () => {
+  it('shows error state when comparison fetch fails and retries', async () => {
     mockedGetComparison.mockRejectedValueOnce(new Error('boom'));
     const user = userEvent.setup();
 

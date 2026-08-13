@@ -1,14 +1,17 @@
 // Admin page tests: status cards, run-signals, per-user config save,
-// global settings save, square-off with confirmation. API is mocked.
+// global settings save, square-off with confirmation. The agent list derives
+// from the user roster (via UserProvider -> getUsers). API is mocked.
 
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import Admin from '../pages/Admin';
 import { ToastProvider } from '../components/Toast';
+import { UserProvider } from '../context/UserProvider';
+import Admin from '../pages/Admin';
 import {
   getAdminSettings,
   getAdminStatus,
+  getUsers,
   runSignalGenerationAndWait,
   squareOff,
   updateAdminSettings,
@@ -18,6 +21,7 @@ import type { AdminStatus, Settings, SignalJob } from '../types';
 
 vi.mock('../services/api');
 
+const mockedGetUsers = vi.mocked(getUsers);
 const mockedGetAdminStatus = vi.mocked(getAdminStatus);
 const mockedGetAdminSettings = vi.mocked(getAdminSettings);
 const mockedRunSignalGenerationAndWait = vi.mocked(runSignalGenerationAndWait);
@@ -25,11 +29,21 @@ const mockedUpdateAdminSettings = vi.mocked(updateAdminSettings);
 const mockedUpdateGlobalSettings = vi.mocked(updateGlobalSettings);
 const mockedSquareOff = vi.mocked(squareOff);
 
+const sampleUsers = [
+  { id: 1, name: 'Trader One' },
+  { id: 2, name: 'System Portfolio' },
+  { id: 3, name: 'System-Reckless' },
+  { id: 4, name: 'Options-Careful' },
+  { id: 5, name: 'Options-Reckless' },
+  { id: 6, name: 'Intraday-Careful' },
+  { id: 7, name: 'Intraday-Reckless' },
+];
+
 const sampleStatus: AdminStatus = {
   utcNow: '2026-08-02T10:00:00Z',
   pendingSignalCount: 4,
   users: [
-    { userId: 2, name: 'System', currentCash: 50000, totalValue: 110000, totalReturn: 10000, totalReturnPercent: 0.1 },
+    { userId: 2, name: 'System Portfolio', currentCash: 50000, totalValue: 110000, totalReturn: 10000, totalReturnPercent: 0.1 },
     { userId: 3, name: 'System-Reckless', currentCash: -20000, totalValue: 110000, totalReturn: 10000, totalReturnPercent: 0.1 },
   ],
 };
@@ -54,10 +68,19 @@ const settings3: Settings = {
   watchlist: [],
 };
 
+const doneJob: SignalJob = {
+  jobId: 1,
+  status: 'SUCCEEDED',
+  startedAt: '2026-08-11T10:00:00Z',
+  finishedAt: '2026-08-11T10:02:00Z',
+  message: 'Signal generation completed: 3 user(s), 0 failures',
+};
+
 function mockDefaultResponses() {
+  mockedGetUsers.mockResolvedValue(sampleUsers);
   mockedGetAdminStatus.mockResolvedValue(sampleStatus);
   mockedGetAdminSettings.mockImplementation((userId: number) =>
-    Promise.resolve(userId === 2 ? settings2 : settings3),
+    Promise.resolve(userId === 2 ? settings2 : { ...settings3, userId }),
   );
   mockedRunSignalGenerationAndWait.mockResolvedValue(doneJob);
   mockedUpdateAdminSettings.mockImplementation((userId: number, s: Settings) =>
@@ -72,18 +95,12 @@ function mockDefaultResponses() {
   });
 }
 
-const doneJob: SignalJob = {
-  jobId: 1,
-  status: 'SUCCEEDED',
-  startedAt: '2026-08-11T10:00:00Z',
-  finishedAt: '2026-08-11T10:02:00Z',
-  message: 'Signal generation completed: 3 user(s), 0 failures',
-};
-
 function renderPage() {
   return render(
     <ToastProvider>
-      <Admin />
+      <UserProvider>
+        <Admin />
+      </UserProvider>
     </ToastProvider>,
   );
 }
@@ -103,14 +120,15 @@ describe('Admin', () => {
 
     expect(await screen.findByText('Pending Signals')).toBeInTheDocument();
     expect(screen.getByText('4')).toBeInTheDocument();
-    expect(await screen.findByText('System Return')).toBeInTheDocument();
+    expect(await screen.findByText('System Portfolio Return')).toBeInTheDocument();
   });
 
-  it('shows config forms for both system users', async () => {
+  it('shows config forms for all agents', async () => {
     renderPage();
 
     expect(await screen.findByTestId('config-2')).toBeInTheDocument();
     expect(screen.getByTestId('config-3')).toBeInTheDocument();
+    expect(screen.getByTestId('config-7')).toBeInTheDocument();
     expect(screen.getByTestId('negative-limit-3')).toHaveValue(100000);
     expect(screen.getByTestId('interest-rate-3')).toHaveValue(0.0005);
   });
@@ -171,8 +189,8 @@ describe('Admin', () => {
     const user = userEvent.setup();
     renderPage();
 
-    await screen.findByTestId('square-off-reckless');
-    await user.click(screen.getByTestId('square-off-reckless'));
+    await screen.findByTestId('square-off-3');
+    await user.click(screen.getByTestId('square-off-3'));
 
     expect(screen.getByTestId('square-off-confirm')).toBeInTheDocument();
     expect(mockedSquareOff).not.toHaveBeenCalled();
@@ -187,7 +205,9 @@ describe('Admin', () => {
   });
 
   it('shows error state when status fetch fails and retries', async () => {
-    mockedGetAdminStatus.mockRejectedValueOnce(new Error('boom'));
+    // Persistent rejection: fetchData re-fires once the user roster loads, so
+    // the failure must survive that refetch until we retry.
+    mockedGetAdminStatus.mockRejectedValue(new Error('boom'));
     const user = userEvent.setup();
 
     renderPage();

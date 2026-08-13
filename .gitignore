@@ -20,6 +20,12 @@ __pycache__/
 venv/
 .venv/
 
+## Data / artifacts
+pgdata/
+*.pkl
+*.joblib
+reports/
+
 ## IDE
 .idea/
 .vscode/

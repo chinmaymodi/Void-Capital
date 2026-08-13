@@ -28,14 +28,36 @@ public class SignalPerformanceService
 
         foreach (var perf in pending)
         {
-            var symbol = perf.Signal?.Symbol;
+            var signal = perf.Signal;
+            var symbol = signal?.Symbol;
             if (string.IsNullOrEmpty(symbol))
                 continue;
 
             // D3: fresh price, not the 1h Redis cache -- the cycle just wrote
             // new signals and resolved them in the same run, so a stale quote
             // could settle a signal against yesterday's price.
-            var currentPrice = await _marketData.GetCurrentPriceFreshAsync(symbol);
+            // D16: options signals (CE/PE) resolve against the contract settle
+            // (fo_options), not the stock quote; an unobservable settle leaves
+            // the row PENDING rather than resolving against the wrong price.
+            decimal? currentPrice;
+            if (signal is { InstrumentType: not "EQ" }
+                && signal.Expiry is not null && signal.Strike is not null)
+            {
+                try
+                {
+                    currentPrice = await _marketData.GetOptionPriceAsync(
+                        symbol, signal.Expiry.Value, signal.Strike.Value, signal.InstrumentType);
+                }
+                catch (NotFoundException)
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                currentPrice = await _marketData.GetCurrentPriceFreshAsync(symbol);
+            }
+
             var age = (DateTime.UtcNow - perf.CreatedAt).Days;
 
             if (perf.TargetPrice.HasValue && currentPrice >= perf.TargetPrice.Value)

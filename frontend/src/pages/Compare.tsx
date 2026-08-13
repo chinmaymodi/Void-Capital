@@ -1,19 +1,15 @@
-// Compare page (D7.3): three-column comparison of Your Portfolio (user 1),
-// System (user 2), and System-Reckless (user 3), with an overlay chart of all
-// three portfolio curves and a gap summary. Data comes from
-// GET /performance/compare + the three portfolio history endpoints.
+// Compare page (D7.3): side-by-side columns of every user's portfolio (the
+// current user first, labeled "Your Portfolio", followed by all other users),
+// with an overlay chart of all portfolio curves and a gap summary. The column
+// list derives from GET /users so newly seeded users appear automatically.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { EmptyState, ErrorState, Spinner } from '../components/ui';
+import { useUser } from '../context/useUser';
+import { CHART_COLORS } from '../constants/chartColors';
 import { getComparison, getPortfolioHistory } from '../services/api';
 import type { ComparisonPortfolio, PnlSnapshot, PortfolioComparison } from '../types';
-
-const COLUMNS = [
-  { key: 'your', label: 'Your Portfolio', userId: 1 },
-  { key: 'system', label: 'System', userId: 2 },
-  { key: 'reckless', label: 'System-Reckless', userId: 3 },
-] as const;
 
 const currency = new Intl.NumberFormat('en-IN', {
   style: 'currency',
@@ -29,36 +25,47 @@ const currency2 = new Intl.NumberFormat('en-IN', {
 
 const pct = new Intl.NumberFormat('en-IN', { style: 'percent', maximumFractionDigits: 2 });
 
-const SERIES: Record<string, { stroke: string; label: string }> = {
-  user1: { stroke: '#4f8ef7', label: 'Your Portfolio' },
-  user2: { stroke: '#3dbf7d', label: 'System' },
-  user3: { stroke: '#e8a13a', label: 'System-Reckless' },
-};
-
 export function Compare() {
+  const { users, currentUserId } = useUser();
   const [comparison, setComparison] = useState<PortfolioComparison | null>(null);
   const [histories, setHistories] = useState<Record<number, PnlSnapshot[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Column list derives from the user roster: current user first ("Your
+  // Portfolio"), then everyone else by name. Colors cycle the palette.
+  const columns = useMemo(
+    () =>
+      [...users]
+        .sort((a, b) => a.id - b.id)
+        .sort((a, b) => (a.id === currentUserId ? -1 : 0) - (b.id === currentUserId ? -1 : 0))
+        .map((u, i) => ({
+          key: `user${u.id}`,
+          label: u.id === currentUserId ? 'Your Portfolio' : u.name,
+          userId: u.id,
+          stroke: CHART_COLORS[i % CHART_COLORS.length],
+        })),
+    [users, currentUserId],
+  );
 
   const fetchData = useCallback(() => {
     setLoading(true);
     setError(null);
     Promise.all([
       getComparison(),
-      ...COLUMNS.map((c) => getPortfolioHistory(c.userId)),
+      ...columns.map((c) => getPortfolioHistory(c.userId)),
     ])
       .then(([comp, ...history]) => {
         setComparison(comp);
         const map: Record<number, PnlSnapshot[]> = {};
-        COLUMNS.forEach((c, i) => {
+        columns.forEach((c, i) => {
           map[c.userId] = history[i];
         });
         setHistories(map);
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load comparison'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [columns]);
 
   useEffect(() => {
     fetchData();
@@ -67,10 +74,10 @@ export function Compare() {
   const portfolioFor = (userId: number): ComparisonPortfolio | undefined =>
     comparison?.portfolios.find((p) => p.userId === userId);
 
-  // Merge the three histories into rows keyed by date.
+  // Merge the histories into rows keyed by date.
   const chartData = useCallback(() => {
     const byDate = new Map<string, Record<string, number | string>>();
-    for (const { userId } of COLUMNS) {
+    for (const { userId } of columns) {
       for (const snap of histories[userId] ?? []) {
         const row = byDate.get(snap.date) ?? { date: snap.date };
         row[`user${userId}`] = snap.portfolioValue;
@@ -78,9 +85,9 @@ export function Compare() {
       }
     }
     return [...byDate.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
-  }, [histories]);
+  }, [histories, columns]);
 
-  const hasAnyHistory = COLUMNS.some((c) => (histories[c.userId]?.length ?? 0) > 0);
+  const hasAnyHistory = columns.some((c) => (histories[c.userId]?.length ?? 0) > 0);
 
   if (loading) return <Spinner />;
   if (error) return <ErrorState message={error} onRetry={fetchData} />;
@@ -92,7 +99,7 @@ export function Compare() {
       </div>
 
       <div className="compare-grid" data-testid="compare-grid">
-        {COLUMNS.map((c) => {
+        {columns.map((c) => {
           const p = portfolioFor(c.userId);
           return (
             <div key={c.key} className={`compare-column compare-${c.key}`} data-testid={`column-${c.key}`}>
@@ -145,13 +152,13 @@ export function Compare() {
                 />
                 <Tooltip labelStyle={{ fontSize: 12 }} />
                 <Legend />
-                {COLUMNS.map((c) => (
+                {columns.map((c) => (
                   <Line
                     key={c.userId}
                     type="monotone"
                     dataKey={`user${c.userId}`}
                     name={c.label}
-                    stroke={SERIES[`user${c.userId}`].stroke}
+                    stroke={c.stroke}
                     strokeWidth={2}
                     dot={false}
                   />

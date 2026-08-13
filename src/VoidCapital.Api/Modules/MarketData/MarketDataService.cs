@@ -56,4 +56,14 @@ public class MarketDataService : IMarketDataService
 
     public Task<IEnumerable<StockPrice>> GetPriceHistoryAsync(string symbol, DateOnly from, DateOnly to) =>
         _repo.GetPriceHistoryAsync(symbol, from, to);
+
+    public async Task<decimal> GetOptionPriceAsync(string symbol, DateOnly expiry, decimal strike, string optType)
+    {
+        // D16: options fills price at the reconstructed settle (fo_options),
+        // not the stock quote. Read fresh -- bhavcopy settles land once per
+        // day and the daily cycle may have just written them.
+        return await _repo.GetOptionPriceAsync(symbol, expiry, strike, optType)
+            ?? throw new NotFoundException(
+                $"No option data for {symbol} {optType} {expiry} strike {strike}");
+    }
 }

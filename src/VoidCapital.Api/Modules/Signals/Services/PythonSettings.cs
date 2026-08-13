@@ -16,4 +16,7 @@ public class PythonSettings
 
     /// <summary>Absolute path to the daily feature refresh script (D1, step 0).</summary>
     public string RefreshScriptPath { get; set; } = string.Empty;
+
+    /// <summary>Absolute path to the desktop notification script (D11.2, optional).</summary>
+    public string NotificationScriptPath { get; set; } = string.Empty;
 }

@@ -117,7 +117,33 @@ public class SignalService : ISignalService
                 if (signal.SuggestedQuantity is null or <= 0)
                     throw new ValidationException("Signal has no suggested quantity.");
 
-                if (signal.Action == "BUY")
+                if (signal.InstrumentType != "EQ")
+                {
+                    // D16: options agents (4/5). The BUY fills at the premium
+                    // the Python pipeline reconstructed (the signal entry);
+                    // the SELL exits the exact contract at its current settle.
+                    if (signal.Expiry is null || signal.Strike is null)
+                        throw new ValidationException(
+                            $"Options signal is missing expiry or strike.");
+
+                    if (signal.Action == "BUY")
+                    {
+                        var premium = signal.Performance?.EntryPrice
+                            ?? throw new ValidationException("Options BUY has no entry premium.");
+                        await _portfolioService.ExecuteOptionsBuyAsync(
+                            signal.UserId, signal.Symbol, signal.InstrumentType,
+                            signal.Expiry.Value, signal.Strike.Value,
+                            signal.SuggestedQuantity.Value, premium);
+                    }
+                    else
+                    {
+                        await _portfolioService.ExecuteOptionsSellAsync(
+                            signal.UserId, signal.Symbol, signal.InstrumentType,
+                            signal.Expiry.Value, signal.Strike.Value,
+                            signal.SuggestedQuantity.Value);
+                    }
+                }
+                else if (signal.Action == "BUY")
                 {
                     await _portfolioService.ExecuteBuyAsync(signal.UserId, signal.Symbol, signal.SuggestedQuantity.Value);
                 }

@@ -30,6 +30,19 @@ public class HoldingRepository : IHoldingRepository
             .FirstOrDefaultAsync();
     }
 
+    public async Task<Holding?> GetByInstrumentAsync(int userId, string instrumentType,
+        string symbol, DateOnly? expiry, decimal? strike)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        return await db.Holdings
+            .Where(h => h.UserId == userId
+                && h.InstrumentType == instrumentType
+                && h.Symbol == symbol
+                && h.Expiry == expiry
+                && h.Strike == strike)
+            .FirstOrDefaultAsync();
+    }
+
     public async Task<int> AddAsync(Holding holding)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
