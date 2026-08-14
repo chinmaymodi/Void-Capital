@@ -1,4 +1,5 @@
 using VoidCapital.Api.Modules.MarketData;
+using VoidCapital.Api.Shared;
 using VoidCapital.Api.Shared.Repositories;
 
 namespace VoidCapital.Api.Modules.Signals.Services;

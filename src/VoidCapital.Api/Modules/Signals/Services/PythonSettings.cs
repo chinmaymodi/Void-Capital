@@ -19,4 +19,7 @@ public class PythonSettings
 
     /// <summary>Absolute path to the desktop notification script (D11.2, optional).</summary>
     public string NotificationScriptPath { get; set; } = string.Empty;
+
+    /// <summary>Absolute path to the live intraday collector script (D19 fallback).</summary>
+    public string CollectLiveScriptPath { get; set; } = string.Empty;
 }

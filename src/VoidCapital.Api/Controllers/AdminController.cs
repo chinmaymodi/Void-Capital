@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using VoidCapital.Api.Modules.Portfolio;
 using VoidCapital.Api.Modules.Portfolio.DTOs;
+using VoidCapital.Api.Modules.Portfolio.Models;
 using VoidCapital.Api.Modules.Signals;
 using VoidCapital.Api.Modules.Signals.DTOs;
 using VoidCapital.Api.Modules.Signals.Models;

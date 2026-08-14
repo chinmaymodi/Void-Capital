@@ -62,4 +62,24 @@ public class MarketDataRepository : IMarketDataRepository
             await conn.CloseAsync();
         }
     }
+
+    public async Task<DateTime?> GetLatestIntradayTimestampAsync()
+    {
+        // market_data.stocks_intraday_1m is owned by the Python pipeline; no
+        // EF entity maps it, so read the newest bar timestamp with raw SQL.
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT MAX(ts) FROM market_data.stocks_intraday_1m";
+            var result = await cmd.ExecuteScalarAsync();
+            return result is null or DBNull ? null : (DateTime)result;
+        }
+        finally
+        {
+            await conn.CloseAsync();
+        }
+    }
 }

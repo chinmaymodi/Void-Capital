@@ -25,6 +25,34 @@ const currency2 = new Intl.NumberFormat('en-IN', {
 
 const pct = new Intl.NumberFormat('en-IN', { style: 'percent', maximumFractionDigits: 2 });
 
+// Risk metrics from a daily portfolio-value series (D17 overlay).
+// CAGR: annualized growth over the series span. Sharpe: mean/std of daily
+// returns annualized by sqrt(252). Max drawdown: worst peak-to-trough.
+function riskMetrics(snaps: PnlSnapshot[]) {
+  if (snaps.length < 2) return null;
+  const sorted = [...snaps].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const values = sorted.map((s) => s.portfolioValue);
+  const start = values[0];
+  const end = values[values.length - 1];
+  const days = Math.max(1, (new Date(sorted[sorted.length - 1].date).getTime() - new Date(sorted[0].date).getTime()) / 86_400_000);
+  const cagr = start > 0 ? Math.pow(end / start, 365 / days) - 1 : -1;
+  const returns: number[] = [];
+  for (let i = 1; i < values.length; i++) {
+    if (values[i - 1] > 0) returns.push(values[i] / values[i - 1] - 1);
+  }
+  const mean = returns.reduce((a, b) => a + b, 0) / Math.max(1, returns.length);
+  const variance = returns.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, returns.length);
+  const std = Math.sqrt(variance);
+  const sharpe = std > 0 ? (mean / std) * Math.sqrt(252) : 0;
+  let peak = values[0];
+  let maxDd = 0;
+  for (const v of values) {
+    if (v > peak) peak = v;
+    if (peak > 0) maxDd = Math.min(maxDd, v / peak - 1);
+  }
+  return { cagr, sharpe, maxDrawdown: maxDd };
+}
+
 export function Compare() {
   const { users, currentUserId } = useUser();
   const [comparison, setComparison] = useState<PortfolioComparison | null>(null);
@@ -101,6 +129,7 @@ export function Compare() {
       <div className="compare-grid" data-testid="compare-grid">
         {columns.map((c) => {
           const p = portfolioFor(c.userId);
+          const m = riskMetrics(histories[c.userId] ?? []);
           return (
             <div key={c.key} className={`compare-column compare-${c.key}`} data-testid={`column-${c.key}`}>
               <h2>{c.label}</h2>
@@ -125,6 +154,22 @@ export function Compare() {
                         {currency2.format(p.totalReturn)} ({pct.format(p.totalReturnPercent)})
                       </dd>
                     </div>
+                    {m && (
+                      <>
+                        <div>
+                          <dt>CAGR</dt>
+                          <dd className={`pnl ${m.cagr >= 0 ? 'positive' : 'negative'}`}>{pct.format(m.cagr)}</dd>
+                        </div>
+                        <div>
+                          <dt>Sharpe</dt>
+                          <dd className={`pnl ${m.sharpe >= 0 ? 'positive' : 'negative'}`}>{m.sharpe.toFixed(2)}</dd>
+                        </div>
+                        <div>
+                          <dt>Max Drawdown</dt>
+                          <dd className="pnl negative">{pct.format(m.maxDrawdown)}</dd>
+                        </div>
+                      </>
+                    )}
                   </dl>
                 </>
               ) : (

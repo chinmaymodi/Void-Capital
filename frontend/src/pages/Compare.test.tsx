@@ -90,6 +90,37 @@ describe('Compare', () => {
     expect(screen.getAllByText('₹1,10,000').length).toBeGreaterThanOrEqual(1);
   });
 
+  it('renders CAGR, Sharpe and max drawdown overlay when history exists', async () => {
+    // Two-day series: 100 -> 110 (10% gain). CAGR annualizes the gain over
+    // the 1-day span (huge positive number); Sharpe is positive; max
+    // drawdown is 0. Assert the labels and the positive/negative styling
+    // rather than exact annualized values.
+    mockedGetPortfolioHistory.mockResolvedValue([
+      { date: '2026-01-01', portfolioValue: 100, cashValue: 100, holdingsValue: 0 },
+      { date: '2026-01-02', portfolioValue: 110, cashValue: 110, holdingsValue: 0 },
+    ]);
+    renderPage();
+
+    expect(await screen.findAllByText('CAGR').then((nodes) => nodes.length)).toBe(7);
+    expect(screen.getAllByText('Sharpe').length).toBe(7);
+    expect(screen.getAllByText('Max Drawdown').length).toBe(7);
+    // Positive CAGR renders with the positive pnl class.
+    expect(document.querySelectorAll('.compare-stats .pnl.positive').length).toBeGreaterThanOrEqual(7);
+  });
+
+  it('renders negative metrics when the series loses value', async () => {
+    mockedGetPortfolioHistory.mockResolvedValue([
+      { date: '2026-01-01', portfolioValue: 100, cashValue: 100, holdingsValue: 0 },
+      { date: '2026-01-02', portfolioValue: 50, cashValue: 50, holdingsValue: 0 },
+    ]);
+    renderPage();
+
+    expect(await screen.findAllByText('Max Drawdown').then((nodes) => nodes.length)).toBe(7);
+    // -50% over 1 day annualizes to roughly -100% CAGR; max drawdown is
+    // -50%. Both render with the negative pnl class.
+    expect(document.querySelectorAll('.compare-stats .pnl.negative').length).toBeGreaterThanOrEqual(7);
+  });
+
   it('renders gap summary rows', async () => {
     renderPage();
 
