@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace VoidCapital.Api.Modules.Portfolio.DTOs;
 
 /// <summary>One user's balance line in the admin status report.</summary>
@@ -27,8 +29,10 @@ public record SquareOffResultDto(
 
 /// <summary>
 /// Body for <c>PUT /api/v1/admin/settings/global</c>. Applied to every user's
-/// settings row (there is no dedicated global-config table).
+/// settings row (there is no dedicated global-config table). MinConfidence is
+/// the approval-gate threshold in [0,1]; [ApiController] model validation
+/// rejects out-of-range values with 400 before any persistence.
 /// </summary>
 public record GlobalSettingsRequest(
-    decimal MinConfidence,
+    [Range(0.0, 1.0)] decimal MinConfidence,
     string[] Watchlist);

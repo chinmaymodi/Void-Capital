@@ -12,7 +12,8 @@ public class IntradayCycleSchedulerTests
     [Theory]
     [InlineData(3, 45)]   // 09:15 IST open, inclusive
     [InlineData(6, 0)]    // midday
-    [InlineData(9, 44)]   // one minute before close
+    [InlineData(9, 44)]   // one minute before old close, still inside
+    [InlineData(9, 59)]   // one minute before close
     public void IsMarketHours_TrueInsideWindow(int hour, int minute)
     {
         var now = new DateTime(2026, 8, 13, hour, minute, 0, DateTimeKind.Utc);
@@ -21,7 +22,7 @@ public class IntradayCycleSchedulerTests
 
     [Theory]
     [InlineData(3, 44)]   // one minute before open
-    [InlineData(9, 45)]   // exactly at close, exclusive
+    [InlineData(10, 0)]   // exactly at close, exclusive
     [InlineData(12, 0)]   // afternoon
     [InlineData(0, 0)]    // midnight
     public void IsMarketHours_FalseOutsideWindow(int hour, int minute)
@@ -34,7 +35,7 @@ public class IntradayCycleSchedulerTests
     [InlineData(2026, 8, 15, 6, 0)]   // Saturday 11:30 IST - inside window, weekend
     [InlineData(2026, 8, 16, 6, 0)]   // Sunday 11:30 IST - inside window, weekend
     [InlineData(2026, 8, 15, 3, 45)]  // Saturday exactly at open
-    [InlineData(2026, 8, 16, 9, 44)]  // Sunday one minute before close
+    [InlineData(2026, 8, 16, 9, 59)]  // Sunday one minute before close
     public void IsMarketHours_FalseOnWeekends(int year, int month, int day, int hour, int minute)
     {
         var now = new DateTime(year, month, day, hour, minute, 0, DateTimeKind.Utc);

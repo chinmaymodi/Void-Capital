@@ -18,9 +18,9 @@ namespace VoidCapital.Api.Services;
 /// </summary>
 public class IntradayCycleService : BackgroundService
 {
-    // Market hours: 09:15-15:15 IST = 03:45-09:45 UTC (CAS session end).
+    // Market hours: 09:15-15:30 IST = 03:45-10:00 UTC (NSE cash close).
     internal static readonly TimeSpan MarketOpenUtc = new(3, 45, 0);
-    internal static readonly TimeSpan MarketCloseUtc = new(9, 45, 0);
+    internal static readonly TimeSpan MarketCloseUtc = new(10, 0, 0);
     internal static readonly TimeSpan CheckInterval = TimeSpan.FromMinutes(5);
     internal static readonly TimeSpan StaleThreshold = TimeSpan.FromMinutes(5);
     internal static readonly TimeSpan CollectTimeout = TimeSpan.FromMinutes(10);

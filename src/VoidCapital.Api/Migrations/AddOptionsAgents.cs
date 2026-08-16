@@ -17,9 +17,9 @@ public class AddOptionsAgents : Migration
         
         Insert.IntoTable("settings").InSchema("identity")
             .Row(new { user_id = 4, auto_execute = true, min_confidence = 0.50m, negative_limit = 0m, interest_rate = 0m, watchlist = watchlist })
-            .Row(new { user_id = 5, auto_execute = true, min_confidence = 0.50m, negative_limit = 100000m, interest_rate = 0.0005m, watchlist = watchlist })
+            .Row(new { user_id = 5, auto_execute = true, min_confidence = 0.50m, negative_limit = 100000m, interest_rate = 0.1825m, watchlist = watchlist })
             .Row(new { user_id = 6, auto_execute = true, min_confidence = 0.50m, negative_limit = 0m, interest_rate = 0m, watchlist = watchlist })
-            .Row(new { user_id = 7, auto_execute = true, min_confidence = 0.50m, negative_limit = 100000m, interest_rate = 0.0005m, watchlist = watchlist });
+            .Row(new { user_id = 7, auto_execute = true, min_confidence = 0.50m, negative_limit = 100000m, interest_rate = 0.1825m, watchlist = watchlist });
     }
 
     public override void Down()

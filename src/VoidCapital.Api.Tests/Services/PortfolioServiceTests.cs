@@ -296,6 +296,75 @@ public class PortfolioServiceTests
             .WithMessage("*No holding of TCS*");
     }
 
+    // ---------- ExecuteOptionsSell ----------
+
+    private static Holding MakeOptionHolding(int quantity = 10) => new()
+    {
+        Id = 1,
+        UserId = 1,
+        InstrumentType = "CE",
+        Symbol = "RELIANCE",
+        Expiry = new DateOnly(2026, 8, 25),
+        Strike = 2500m,
+        Quantity = quantity,
+        AvgPrice = 5m
+    };
+
+    [Fact]
+    public async Task ExecuteOptionsSell_WithPrice_AddsProceeds()
+    {
+        var user = MakeUser(cash: 10000m);
+        var holding = MakeOptionHolding();
+        _userRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(user);
+        _holdingRepo.Setup(r => r.GetByInstrumentAsync(1, "CE", "RELIANCE",
+            holding.Expiry!.Value, holding.Strike!.Value)).ReturnsAsync(holding);
+        _marketData.Setup(m => m.GetOptionPriceAsync("RELIANCE",
+            holding.Expiry!.Value, holding.Strike!.Value, "CE")).ReturnsAsync(50m);
+
+        var service = CreateService();
+        var trade = await service.ExecuteOptionsSellAsync(
+            1, "RELIANCE", "CE", holding.Expiry!.Value, holding.Strike!.Value, 10);
+
+        trade.Type.Should().Be("SELL");
+        trade.Price.Should().Be(50m);
+        trade.TotalValue.Should().Be(500m);
+        // Cash increased: 10000 + 500 = 10500
+        _userRepo.Verify(r => r.UpdateCashAsync(1, 10500m), Times.Once);
+        // Selling all -> holding deleted
+        _holdingRepo.Verify(r => r.DeleteAsync(holding.Id), Times.Once);
+        _holdingRepo.Verify(r => r.UpdateAsync(It.IsAny<Holding>()), Times.Never);
+        _tradeRepo.Verify(r => r.AddAsync(It.IsAny<Trade>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ExecuteOptionsSell_WhenNoOptionData_WritesOffAtZero()
+    {
+        // F17: an expired contract has no fo_options row -> GetOptionPriceAsync
+        // throws NotFoundException. The sell must write the position off at 0
+        // (holding cleared, cash unchanged, SELL trade at price 0) instead of
+        // aborting the margin-call loop / signal execution.
+        var user = MakeUser(cash: 10000m);
+        var holding = MakeOptionHolding();
+        _userRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(user);
+        _holdingRepo.Setup(r => r.GetByInstrumentAsync(1, "CE", "RELIANCE",
+            holding.Expiry!.Value, holding.Strike!.Value)).ReturnsAsync(holding);
+        _marketData.Setup(m => m.GetOptionPriceAsync("RELIANCE",
+            holding.Expiry!.Value, holding.Strike!.Value, "CE"))
+            .ThrowsAsync(new NotFoundException("No option data"));
+
+        var service = CreateService();
+        var trade = await service.ExecuteOptionsSellAsync(
+            1, "RELIANCE", "CE", holding.Expiry!.Value, holding.Strike!.Value, 10);
+
+        trade.Type.Should().Be("SELL");
+        trade.Price.Should().Be(0m);
+        trade.TotalValue.Should().Be(0m);
+        // Cash unchanged: 10000 + 0 proceeds
+        _userRepo.Verify(r => r.UpdateCashAsync(1, 10000m), Times.Once);
+        _holdingRepo.Verify(r => r.DeleteAsync(holding.Id), Times.Once);
+        _tradeRepo.Verify(r => r.AddAsync(It.IsAny<Trade>()), Times.Once);
+    }
+
     // ---------- Queries ----------
 
     [Fact]

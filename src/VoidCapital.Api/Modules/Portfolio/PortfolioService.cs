@@ -264,8 +264,20 @@ public class PortfolioService : IPortfolioService
             throw new ValidationException(
                 $"Cannot sell {quantity} {symbol} {optType}; you hold {holding.Quantity}.");
 
-        // Exit prices at the current settle premium (fo_options latest).
-        var price = await _marketData.GetOptionPriceAsync(symbol, expiry, strike, optType);
+        // Exit prices at the current settle premium (fo_options latest). An
+        // expired contract has no fo_options row -> NotFoundException; treat
+        // it as a write-off at 0 (F17) instead of aborting the margin-call
+        // loop / signal execution. The holding is still cleared and the SELL
+        // trade recorded at price 0.
+        decimal price;
+        try
+        {
+            price = await _marketData.GetOptionPriceAsync(symbol, expiry, strike, optType);
+        }
+        catch (NotFoundException)
+        {
+            price = 0m;
+        }
         var proceeds = price * quantity;
 
         await _userRepo.UpdateCashAsync(userId, user.CurrentCash + proceeds);
