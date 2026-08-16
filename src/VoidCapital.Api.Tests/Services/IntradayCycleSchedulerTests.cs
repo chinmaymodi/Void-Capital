@@ -30,6 +30,17 @@ public class IntradayCycleSchedulerTests
         Assert.False(IntradayCycleService.IsMarketHours(now));
     }
 
+    [Theory]
+    [InlineData(2026, 8, 15, 6, 0)]   // Saturday 11:30 IST - inside window, weekend
+    [InlineData(2026, 8, 16, 6, 0)]   // Sunday 11:30 IST - inside window, weekend
+    [InlineData(2026, 8, 15, 3, 45)]  // Saturday exactly at open
+    [InlineData(2026, 8, 16, 9, 44)]  // Sunday one minute before close
+    public void IsMarketHours_FalseOnWeekends(int year, int month, int day, int hour, int minute)
+    {
+        var now = new DateTime(year, month, day, hour, minute, 0, DateTimeKind.Utc);
+        Assert.False(IntradayCycleService.IsMarketHours(now));
+    }
+
     [Fact]
     public void NextMarketOpen_SameDayWhenBeforeOpen()
     {

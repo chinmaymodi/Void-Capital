@@ -39,9 +39,16 @@ public class IntradayCycleService : BackgroundService
         _logger = logger;
     }
 
-    /// <summary>True when <paramref name="utcNow"/> falls inside market hours.</summary>
+    /// <summary>True when <paramref name="utcNow"/> falls inside market hours on a trading day.</summary>
     public static bool IsMarketHours(DateTime utcNow)
     {
+        // NSE is closed on weekends. IST = UTC + 5:30, so the IST weekday can
+        // differ from the UTC weekday near midnight IST (18:30 UTC); evaluate
+        // the weekday in IST to be safe.
+        var ist = utcNow.AddHours(5.5);
+        if (ist.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+            return false;
+
         var time = utcNow.TimeOfDay;
         return time >= MarketOpenUtc && time < MarketCloseUtc;
     }
