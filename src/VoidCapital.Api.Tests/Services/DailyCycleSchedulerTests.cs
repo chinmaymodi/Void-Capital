@@ -63,4 +63,32 @@ public class DailyCycleSchedulerTests
         var lastFinished = new DateTime(2026, 8, 5, 12, 32, 0, DateTimeKind.Utc);
         Assert.False(DailyCycleService.NeedsCatchUp(slot, lastFinished));
     }
+
+    [Fact]
+    public void NeedsCatchUp_TrueWhenLastRunFailed_EvenIfFinishedAfterSlot()
+    {
+        // F14: the runner's finally block stamps FinishedAt even on FAILED
+        // runs, so a status-blind check would make the failed slot look
+        // served. FAILED must force catch-up regardless of timing.
+        var slot = new DateTime(2026, 8, 5, 12, 30, 0, DateTimeKind.Utc);
+        var lastFinished = new DateTime(2026, 8, 5, 12, 32, 0, DateTimeKind.Utc);
+        Assert.True(DailyCycleService.NeedsCatchUp(slot, lastFinished, lastStatus: "FAILED"));
+    }
+
+    [Fact]
+    public void NeedsCatchUp_FalseWhenLastRunSucceeded_AndFinishedAfterSlot()
+    {
+        var slot = new DateTime(2026, 8, 5, 12, 30, 0, DateTimeKind.Utc);
+        var lastFinished = new DateTime(2026, 8, 5, 12, 32, 0, DateTimeKind.Utc);
+        Assert.False(DailyCycleService.NeedsCatchUp(slot, lastFinished, lastStatus: "SUCCEEDED"));
+    }
+
+    [Fact]
+    public void NeedsCatchUp_TrueWhenLastRunFailed_BeforeSlot()
+    {
+        // A FAILED run that predates the slot was unserved twice over.
+        var slot = new DateTime(2026, 8, 5, 12, 30, 0, DateTimeKind.Utc);
+        var lastFinished = new DateTime(2026, 8, 4, 12, 31, 0, DateTimeKind.Utc);
+        Assert.True(DailyCycleService.NeedsCatchUp(slot, lastFinished, lastStatus: "FAILED"));
+    }
 }

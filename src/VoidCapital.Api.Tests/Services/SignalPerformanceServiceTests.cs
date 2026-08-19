@@ -3,6 +3,7 @@ using Moq;
 using VoidCapital.Api.Modules.MarketData;
 using VoidCapital.Api.Modules.Signals;
 using VoidCapital.Api.Modules.Signals.Services;
+using VoidCapital.Api.Shared;
 using VoidCapital.Api.Shared.Repositories;
 using Xunit;
 
@@ -103,5 +104,31 @@ public class SignalPerformanceServiceTests
 
         _marketData.Verify(m => m.GetCurrentPriceFreshAsync(It.IsAny<string>()), Times.Never);
         _perfRepo.Verify(r => r.UpdateAsync(It.IsAny<SignalPerformance>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ResolvePendingSignals_WhenOptionPriceNotFoundAndPastEvaluation_MarksExpiredWithNullExit()
+    {
+        var perf = MakePendingPerformance(
+            entry: 100m, target: 110m, stop: 90m,
+            createdAt: DateTime.UtcNow.AddDays(-10));
+        perf.Signal = new Signal
+        {
+            Symbol = "RELIANCE",
+            InstrumentType = "CE",
+            Expiry = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)),
+            Strike = 100m
+        };
+        GivenPending(perf);
+        _marketData.Setup(m => m.GetOptionPriceAsync(
+                "RELIANCE", It.IsAny<DateOnly>(), It.IsAny<decimal>(), "CE", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new NotFoundException("option settle not found"));
+
+        await CreateService().ResolvePendingSignalsAsync();
+
+        perf.Outcome.Should().Be("EXPIRED");
+        perf.ExitPrice.Should().BeNull();
+        perf.ResolvedAt.Should().NotBeNull();
+        _perfRepo.Verify(r => r.UpdateAsync(perf), Times.Once);
     }
 }

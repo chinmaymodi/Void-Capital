@@ -32,7 +32,7 @@ public interface IPortfolioService
     /// Can the user afford this trade? With negativeLimit &gt; 0 the user may
     /// dip into a credit line (broker margin facility) up to that amount.
     /// </summary>
-    bool CanBuy(User user, decimal price, int shares, decimal negativeLimit = 0);
+    bool CanBuy(User user, decimal price, int shares, decimal negativeLimit = 0, decimal commission = 0);
 
     /// <summary>Can the user sell this many shares of the holding?</summary>
     bool CanSell(Holding holding, int shares);

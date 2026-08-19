@@ -26,7 +26,7 @@ public class SignalIntegrationService : ISignalIntegrationService
     private readonly ISettingsRepository _settingsRepo;
     private readonly ILogger<SignalIntegrationService> _logger;
 
-    private const int MaxAttempts = 3;
+    private const int MaxAttempts = 2;
     private static readonly TimeSpan[] BackoffDelays =
     {
         TimeSpan.FromSeconds(1),
@@ -79,7 +79,7 @@ public class SignalIntegrationService : ISignalIntegrationService
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             ct.ThrowIfCancellationRequested();
-            var result = await _pythonBridge.RunSignalGeneration(userId, noGate: false, ct);
+            var result = await _pythonBridge.RunSignalGeneration(userId, ct);
 
             if (result.Success)
             {

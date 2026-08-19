@@ -18,7 +18,7 @@ public interface IProcessRunner
 public class ProcessRunner : IProcessRunner
 {
     /// <summary>Upper bound per Python signal-generation call.</summary>
-    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(15);
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(10);
 
     public async Task<(int ExitCode, string Output, string Error)> RunAsync(
         string fileName, string arguments,

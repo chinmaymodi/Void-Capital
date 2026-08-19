@@ -8,5 +8,6 @@ public record TradeDto(
     int Shares,
     decimal Price,
     decimal Total,
+    decimal Commission,
     string? Reason,
     DateTime Timestamp);

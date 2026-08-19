@@ -24,7 +24,7 @@ public class PerformanceIntegrationTests : IDisposable
     public PerformanceIntegrationTests(IntegrationFactory factory)
     {
         _factory = factory;
-        _client = factory.CreateClient();
+        _client = factory.CreateAuthedClient();
     }
 
     public void Dispose()
@@ -114,7 +114,7 @@ public class PerformanceIntegrationTests : IDisposable
 
     private record ComparisonPortfolio(
         int UserId, string Name, decimal Cash, decimal HoldingsValue, decimal TotalValue,
-        decimal TotalReturn, decimal TotalReturnPercent);
+        decimal TotalReturn, decimal TotalReturnPercent, decimal StartingBudget);
 
     private record ComparisonGap(
         string Leader, string Trailer, decimal GapRupees, decimal GapPercent);
@@ -242,11 +242,13 @@ public class PerformanceIntegrationTests : IDisposable
         portfolioA.TotalValue.Should().Be(90000m);
         portfolioA.TotalReturn.Should().Be(-10000m);
         portfolioA.TotalReturnPercent.Should().Be(-0.1m);
+        portfolioA.StartingBudget.Should().Be(100000m);
 
         var portfolioB = envelope.Data.Portfolios.Single(p => p.UserId == userIdB);
         portfolioB.TotalValue.Should().Be(110000m);
         portfolioB.TotalReturn.Should().Be(10000m);
         portfolioB.TotalReturnPercent.Should().Be(0.1m);
+        portfolioB.StartingBudget.Should().Be(100000m);
 
         var gap = envelope.Data.Gaps.Single(g =>
             (g.Leader == nameB && g.Trailer == nameA) ||

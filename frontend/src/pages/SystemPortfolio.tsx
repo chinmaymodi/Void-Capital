@@ -14,6 +14,7 @@ import {
   getAdminSettings,
   getComparison,
   getHoldings,
+  getModelPerformance,
   getPortfolioHistory,
   getResolvedSignals,
   getTrades,
@@ -26,6 +27,7 @@ import type {
   PagedTrades,
   PnlSnapshot,
   Settings,
+  ModelPerformance,
 } from '../types';
 
 const currency = new Intl.NumberFormat('en-IN', {
@@ -57,13 +59,17 @@ export function SystemPortfolio() {
     () => [...users].filter((u) => u.id !== USER_ID).sort((a, b) => a.id - b.id),
     [users],
   );
-  const [userId, setUserId] = useState(2);
+  const [userId, setUserId] = useState<number | null>(null);
+  // Default to the first agent until the user picks one; never assume a
+  // fixed id (the seed roster can change).
+  const activeUserId = userId ?? agents[0]?.id ?? null;
   const [comparison, setComparison] = useState<ComparisonPortfolio | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [trades, setTrades] = useState<PagedTrades | null>(null);
   const [resolved, setResolved] = useState<PagedResolvedSignals | null>(null);
   const [histories, setHistories] = useState<Record<number, PnlSnapshot[]>>({});
+  const [modelOptions, setModelOptions] = useState<string[]>(['sma', 'rsi', 'ensemble']);
   const [modelFilter, setModelFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -79,13 +85,20 @@ export function SystemPortfolio() {
         getHoldings(uid),
         getTrades({ page: 1, pageSize: 10 }, uid),
         getResolvedSignals({ userId: uid, page: 1, pageSize: 10 }),
+        getModelPerformance(),
       ])
-        .then(([comp, cfg, hold, tr, res]) => {
+        .then(([comp, cfg, hold, tr, res, modelPerf]) => {
           setComparison(comp.portfolios.find((p) => p.userId === uid) ?? null);
           setSettings(cfg);
           setHoldings(hold);
           setTrades(tr);
           setResolved(res);
+          // Derive model filter options from the model performance data so
+          // that production models (e.g. avg3 from F33) appear automatically.
+          const modelOptions = modelPerf.map((m) => m.modelName).filter(
+            (name, idx, self) => self.indexOf(name) === idx,
+          );
+          setModelOptions(modelOptions);
         })
         .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load system portfolio'))
         .finally(() => setLoading(false));
@@ -96,11 +109,11 @@ export function SystemPortfolio() {
   // Fetch every agent's history once for the overlay chart.
   useEffect(() => {
     if (agents.length === 0) return;
-    Promise.all(agents.map((a) => getPortfolioHistory(a.userId)))
+    Promise.all(agents.map((a) => getPortfolioHistory(a.id)))
       .then((all) => {
         const map: Record<number, PnlSnapshot[]> = {};
         agents.forEach((a, i) => {
-          map[a.userId] = all[i];
+          map[a.id] = all[i];
         });
         setHistories(map);
       })
@@ -110,12 +123,14 @@ export function SystemPortfolio() {
   }, [agents]);
 
   useEffect(() => {
-    fetchUserData(userId);
-  }, [userId, fetchUserData]);
+    if (activeUserId == null) return;
+    fetchUserData(activeUserId);
+  }, [activeUserId, fetchUserData]);
 
   const applyModelFilter = () => {
+    if (activeUserId == null) return;
     setResolved(null);
-    getResolvedSignals({ userId, model: modelFilter || undefined, page: 1, pageSize: 10 })
+    getResolvedSignals({ userId: activeUserId, model: modelFilter || undefined, page: 1, pageSize: 10 })
       .then(setResolved)
       .catch((err) => showError(err instanceof Error ? err.message : 'Failed to filter signals'));
   };
@@ -123,19 +138,21 @@ export function SystemPortfolio() {
   const chartData = useCallback(() => {
     const byDate = new Map<string, Record<string, number | undefined>>();
     for (const a of agents) {
-      for (const s of histories[a.userId] ?? []) {
-        const row = byDate.get(s.date) ?? { date: s.date };
-        row[`user${a.userId}`] = s.portfolioValue;
+      for (const s of histories[a.id] ?? []) {
+        const row = byDate.get(s.date) ?? {};
+        row[`user${a.id}`] = s.portfolioValue;
         byDate.set(s.date, row);
       }
     }
-    return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+    return [...byDate.entries()]
+      .sort(([da], [db]) => da.localeCompare(db))
+      .map(([date, values]) => ({ date, ...values }));
   }, [histories, agents]);
 
   if (loading && !comparison) return <Spinner />;
-  if (error && !comparison) return <ErrorState message={error} onRetry={() => fetchUserData(userId)} />;
+  if (error && !comparison) return <ErrorState message={error} onRetry={() => fetchUserData(activeUserId)} />;
 
-  const startingBudget = comparison ? comparison.totalValue - comparison.totalReturn : 0;
+  const startingBudget = comparison?.portfolios?.find((p) => p.userId === activeUserId)?.startingBudget ?? (comparison ? comparison.totalValue - comparison.totalReturn : 0);
 
   return (
     <div className="system-portfolio-page">
@@ -146,7 +163,7 @@ export function SystemPortfolio() {
             <button
               key={u.id}
               type="button"
-              className={`segmented-btn${userId === u.id ? ' active' : ''}`}
+              className={`segmented-btn${activeUserId === u.id ? ' active' : ''}`}
               onClick={() => setUserId(u.id)}
               data-testid={`system-tab-${u.id}`}
             >
@@ -187,7 +204,7 @@ export function SystemPortfolio() {
 
           <section className="card chart-card">
             <h2>Portfolio Value Over Time</h2>
-            {agents.every((a) => (histories[a.userId]?.length ?? 0) === 0) ? (
+            {agents.every((a) => (histories[a.id]?.length ?? 0) === 0) ? (
               <EmptyState message="No portfolio history recorded yet (daily snapshots start once scheduled)" />
             ) : (
               <div className="chart" data-testid="system-chart">
@@ -293,16 +310,18 @@ export function SystemPortfolio() {
             <div className="filter-bar">
               <label className="field-inline">
                 Model
-                <select
-                  value={modelFilter}
-                  onChange={(e) => setModelFilter(e.target.value)}
-                  data-testid="resolution-model-filter"
-                >
-                  <option value="">All models</option>
-                  <option value="sma">sma</option>
-                  <option value="rsi">rsi</option>
-                  <option value="ensemble">ensemble</option>
-                </select>
+<select
+  value={modelFilter}
+  onChange={(e) => setModelFilter(e.target.value)}
+  data-testid="resolution-model-filter"
+>
+  <option value="">All models</option>
+  {modelOptions.map((name) => (
+    <option key={name} value={name}>
+      {name}
+    </option>
+  ))}
+</select>
               </label>
               <button type="button" className="btn" onClick={applyModelFilter} data-testid="apply-resolution-filter">
                 Apply
@@ -353,7 +372,7 @@ export function SystemPortfolio() {
           </section>
         </>
       ) : (
-        <ErrorState message={error ?? 'No comparison data available'} onRetry={() => fetchUserData(userId)} />
+        <ErrorState message={error ?? 'No comparison data available'} onRetry={() => fetchUserData(activeUserId)} />
       )}
     </div>
   );

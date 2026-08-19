@@ -27,4 +27,11 @@
     <ProjectReference Include="..\VoidCapital.Api\VoidCapital.Api.csproj" />
   </ItemGroup>
 
+  <!-- The API loads auth.keys.json from AppContext.BaseDirectory at startup;
+       the WebApplicationFactory boots the real Program, so the test output
+       needs the same file (gitignored, generated once). -->
+  <ItemGroup>
+    <Content Include="..\VoidCapital.Api\auth.keys.json" Link="auth.keys.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

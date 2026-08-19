@@ -12,6 +12,7 @@ public class Trade
     public int Quantity { get; set; }
     public decimal Price { get; set; }
     public decimal TotalValue { get; set; }
+    public decimal Commission { get; set; }
     public string? Reason { get; set; }
     public DateTime Timestamp { get; set; }
 }

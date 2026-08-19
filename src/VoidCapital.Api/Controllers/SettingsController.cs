@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using VoidCapital.Api.Modules.Portfolio.DTOs;
 using VoidCapital.Api.Modules.Portfolio.Models;
@@ -8,6 +9,7 @@ namespace VoidCapital.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/[controller]")]
+[Authorize]
 public class SettingsController : ControllerBase
 {
     private readonly ISettingsRepository _settingsRepo;
@@ -20,6 +22,7 @@ public class SettingsController : ControllerBase
     [HttpGet("{userId:int}")]
     public async Task<ActionResult<ApiResponse<SettingsDto>>> GetSettings(int userId)
     {
+        if (!User.CanAccess(userId)) return Forbid();
         var settings = await GetOrThrowAsync(userId);
         return Ok(ApiResponse<SettingsDto>.Ok(SettingsMapper.ToDto(settings)));
     }
@@ -28,6 +31,7 @@ public class SettingsController : ControllerBase
     public async Task<ActionResult<ApiResponse<SettingsDto>>> UpdateSettings(
         int userId, [FromBody] UpdateSettingsRequest request)
     {
+        if (!User.CanAccess(userId)) return Forbid();
         var settings = await GetOrThrowAsync(userId);
 
         settings.AutoExecute = request.AutoExecute;
@@ -35,6 +39,8 @@ public class SettingsController : ControllerBase
         settings.NegativeLimit = request.NegativeLimit;
         settings.InterestRate = request.InterestRate;
         settings.Watchlist = SettingsMapper.SerializeWatchlist(request.Watchlist);
+        if (request.IsHalted is not null)
+            settings.IsHalted = request.IsHalted.Value;
 
         await _settingsRepo.UpdateAsync(settings);
         return Ok(ApiResponse<SettingsDto>.Ok(SettingsMapper.ToDto(settings)));

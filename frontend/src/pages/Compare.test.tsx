@@ -6,7 +6,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UserProvider } from '../context/UserProvider';
-import Compare from '../pages/Compare';
+import Compare, { riskMetrics } from '../pages/Compare';
 import { getComparison, getPortfolioHistory, getUsers } from '../services/api';
 import type { PortfolioComparison } from '../types';
 
@@ -96,8 +96,8 @@ describe('Compare', () => {
     // drawdown is 0. Assert the labels and the positive/negative styling
     // rather than exact annualized values.
     mockedGetPortfolioHistory.mockResolvedValue([
-      { date: '2026-01-01', portfolioValue: 100, cashValue: 100, holdingsValue: 0 },
-      { date: '2026-01-02', portfolioValue: 110, cashValue: 110, holdingsValue: 0 },
+      { id: 1, userId: 1, date: '2026-01-01', portfolioValue: 100, cashValue: 100, holdingsValue: 0 },
+      { id: 2, userId: 1, date: '2026-01-02', portfolioValue: 110, cashValue: 110, holdingsValue: 0 },
     ]);
     renderPage();
 
@@ -110,8 +110,8 @@ describe('Compare', () => {
 
   it('renders negative metrics when the series loses value', async () => {
     mockedGetPortfolioHistory.mockResolvedValue([
-      { date: '2026-01-01', portfolioValue: 100, cashValue: 100, holdingsValue: 0 },
-      { date: '2026-01-02', portfolioValue: 50, cashValue: 50, holdingsValue: 0 },
+      { id: 1, userId: 1, date: '2026-01-01', portfolioValue: 100, cashValue: 100, holdingsValue: 0 },
+      { id: 2, userId: 1, date: '2026-01-02', portfolioValue: 50, cashValue: 50, holdingsValue: 0 },
     ]);
     renderPage();
 
@@ -154,5 +154,58 @@ describe('Compare', () => {
     await user.click(screen.getByRole('button', { name: /retry/i }));
 
     expect(await screen.findByText('Your Portfolio')).toBeInTheDocument();
+  });
+
+  // ---------- riskMetrics unit tests (F37 / F41) ----------
+
+  it('riskMetrics pins exact values for a 100 -> 110 two-day series', () => {
+    const snaps = [
+      { id: 1, userId: 1, date: '2026-01-01', portfolioValue: 100, cashValue: 100, holdingsValue: 0 },
+      { id: 2, userId: 1, date: '2026-01-02', portfolioValue: 110, cashValue: 110, holdingsValue: 0 },
+    ];
+    const m = riskMetrics(snaps);
+    expect(m).not.toBeNull();
+    // 1 trading day: CAGR = (110/100)^252 - 1; single return -> Sharpe 0; no drawdown.
+    expect(m!.cagr).toBeCloseTo(1.1 ** 252 - 1, 6);
+    expect(m!.sharpe).toBe(0);
+    expect(m!.maxDrawdown).toBe(0);
+  });
+
+  it('riskMetrics pins exact values for a 100 -> 50 two-day series', () => {
+    const snaps = [
+      { id: 1, userId: 1, date: '2026-01-01', portfolioValue: 100, cashValue: 100, holdingsValue: 0 },
+      { id: 2, userId: 1, date: '2026-01-02', portfolioValue: 50, cashValue: 50, holdingsValue: 0 },
+    ];
+    const m = riskMetrics(snaps);
+    expect(m).not.toBeNull();
+    // CAGR = (50/100)^252 - 1 ~= -1 (essentially -100%); max drawdown -50%.
+    expect(m!.cagr).toBeCloseTo(0.5 ** 252 - 1, 6);
+    expect(m!.sharpe).toBe(0);
+    expect(m!.maxDrawdown).toBe(-0.5);
+  });
+
+  it('riskMetrics handles a same-calendar-day span without Infinity', () => {
+    const snaps = [
+      { id: 1, userId: 1, date: '2026-01-01', portfolioValue: 100, cashValue: 100, holdingsValue: 0 },
+      { id: 2, userId: 1, date: '2026-01-01', portfolioValue: 110, cashValue: 110, holdingsValue: 0 },
+    ];
+    const m = riskMetrics(snaps);
+    expect(m).not.toBeNull();
+    expect(Number.isFinite(m!.cagr)).toBe(true);
+    expect(m!.cagr).toBeCloseTo(1.1 ** 252 - 1, 6);
+  });
+
+  it('riskMetrics returns null for fewer than two snapshots', () => {
+    expect(riskMetrics([])).toBeNull();
+    expect(
+      riskMetrics([{
+        id: 1,
+        userId: 1,
+        date: '2026-01-01',
+        portfolioValue: 100,
+        cashValue: 100,
+        holdingsValue: 0,
+      }])
+    ).toBeNull();
   });
 });

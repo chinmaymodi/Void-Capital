@@ -1,9 +1,12 @@
 using FluentMigrator.Runner;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting.WindowsServices;
 using Serilog;
 using VoidCapital.Api.Data;
 using VoidCapital.Api.Middleware;
+using VoidCapital.Api.Modules.Auth.Models;
+using VoidCapital.Api.Modules.Auth.Services;
 using VoidCapital.Api.Modules.MarketData;
 using VoidCapital.Api.Modules.Portfolio;
 using VoidCapital.Api.Modules.Signals.Services;
@@ -55,9 +58,22 @@ try
         .AddNpgSql(postgresConnection)
         .AddRedis(redisConnection);
 
+    // API-key auth (A1-class review fixes). Keys live in auth.keys.json
+    // (gitignored, generated once, copied to output). The admin key grants the
+    // Admin role; per-user keys grant access to that user's own data.
+    var authKeysPath = Path.Combine(AppContext.BaseDirectory, "auth.keys.json");
+    builder.Services.AddSingleton(AuthKeys.Load(authKeysPath));
+    builder.Services.AddAuthentication(ApiKeyAuthenticationHandler.SchemeName)
+        .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(
+            ApiKeyAuthenticationHandler.SchemeName, null);
+    builder.Services.AddAuthorization();
+
     builder.Services.AddCors(options =>
         options.AddDefaultPolicy(policy =>
-            policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
+            policy.WithOrigins(
+                    builder.Configuration.GetSection("Cors:AllowedOrigins")
+                        .Get<string[]>() ?? Array.Empty<string>())
+                .AllowAnyMethod().AllowAnyHeader()));
 
     // Redis distributed cache (Cache-Aside pattern for market data)
     builder.Services.AddStackExchangeRedisCache(options =>
@@ -91,6 +107,10 @@ try
     builder.Services.AddScoped<ISignalIntegrationService, SignalIntegrationService>();
     builder.Services.AddScoped<ICycleRunRepository, CycleRunRepository>();
     builder.Services.AddScoped<IDailyCycleRunner, DailyCycleRunner>();
+    builder.Services.AddScoped<IAdminService, AdminService>();
+    // DS1: cross-instance cycle lock. Needs the raw connection string, so it
+    // is registered with a factory rather than resolved from config.
+    builder.Services.AddScoped<ICycleLock>(_ => new PostgresCycleLock(postgresConnection));
     builder.Services.AddSingleton<ISignalJobService, SignalJobService>();
     builder.Services.AddHostedService<DailyCycleService>();
     builder.Services.AddHostedService<IntradayCycleService>();
@@ -116,6 +136,8 @@ try
 
     app.UseMiddleware<ExceptionMiddleware>();
     app.UseCors();
+    app.UseAuthentication();
+    app.UseAuthorization();
     app.MapControllers();
     app.MapHealthChecks("/api/health");
 

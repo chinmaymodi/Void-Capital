@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+using VoidCapital.Api.Data;
 using VoidCapital.Api.Modules.MarketData;
 using VoidCapital.Api.Modules.Portfolio.DTOs;
 using VoidCapital.Api.Modules.Portfolio.Models;
@@ -10,14 +12,10 @@ namespace VoidCapital.Api.Modules.Portfolio;
 /// Portfolio engine: enforces business rules (CanBuy/CanSell) before any trade
 /// executes. Depends on repository interfaces and IMarketDataService, never on
 /// Npgsql directly (DIP).
-///
-/// Known limitation: ExecuteBuy/ExecuteSell perform cash update, holding
-/// update, and trade log insert as separate operations without a wrapping DB
-/// transaction. Acceptable for the demo scope of D3; revisit with a
-/// transaction-aware path before any real-money-style deployment.
 /// </summary>
 public class PortfolioService : IPortfolioService
 {
+    private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly IUserRepository _userRepo;
     private readonly IHoldingRepository _holdingRepo;
     private readonly ITradeRepository _tradeRepo;
@@ -26,6 +24,7 @@ public class PortfolioService : IPortfolioService
     private readonly IMarketDataService _marketData;
 
     public PortfolioService(
+        IDbContextFactory<AppDbContext> dbFactory,
         IUserRepository userRepo,
         IHoldingRepository holdingRepo,
         ITradeRepository tradeRepo,
@@ -33,6 +32,7 @@ public class PortfolioService : IPortfolioService
         ISettingsRepository settingsRepo,
         IMarketDataService marketData)
     {
+        _dbFactory = dbFactory;
         _userRepo = userRepo;
         _holdingRepo = holdingRepo;
         _tradeRepo = tradeRepo;
@@ -43,12 +43,12 @@ public class PortfolioService : IPortfolioService
 
     // ---------- Validation rules ----------
 
-    public bool CanBuy(User user, decimal price, int shares, decimal negativeLimit = 0)
+    public bool CanBuy(User user, decimal price, int shares, decimal negativeLimit = 0, decimal commission = 0)
     {
         if (shares <= 0 || price <= 0 || user is null)
             return false;
 
-        var cost = price * shares;
+        var cost = price * shares + commission;
 
         // Hard limit: cannot spend more than available cash.
         if (negativeLimit == 0)
@@ -128,14 +128,22 @@ public class PortfolioService : IPortfolioService
         symbol = NormalizeSymbol(symbol);
         var user = await GetUserOrThrowAsync(userId);
         var price = await _marketData.GetCurrentPriceAsync(symbol);
+        if (price <= 0)
+            throw new ValidationException($"Price not found for {symbol}.");
         var negativeLimit = await GetNegativeLimitAsync(userId);
-
-        if (!CanBuy(user, price, shares, negativeLimit))
-            throw new InsufficientFundsException(
-                $"Insufficient cash to buy {shares} shares of {symbol} at {price} (cost {price * shares}, cash {user.CurrentCash}).");
-
         var cost = price * shares;
-        await _userRepo.UpdateCashAsync(userId, user.CurrentCash - cost);
+        var commission = TradeCostCalculator.EquityCost(cost, "BUY");
+
+        if (!CanBuy(user, price, shares, negativeLimit, commission))
+            throw new InsufficientFundsException(
+                $"Insufficient cash to buy {shares} shares of {symbol} at {price} "
+                + $"(cost {cost} + commission {commission}, cash {user.CurrentCash}).");
+
+        await using var dbContext = await _dbFactory.CreateDbContextAsync();
+        await using var transaction = await dbContext.Database.BeginTransactionAsync();
+        
+        await _userRepo.UpdateCashAtomicAsync(userId, -(cost + commission));
+            
         await UpsertHoldingAsync(userId, symbol, shares, price);
 
         var trade = new Trade
@@ -146,10 +154,13 @@ public class PortfolioService : IPortfolioService
             Quantity = shares,
             Price = price,
             TotalValue = cost,
+            Commission = commission,
             Reason = "Manual trade",
             Timestamp = DateTime.UtcNow
         };
         await _tradeRepo.AddAsync(trade);
+        
+        await transaction.CommitAsync();
         return trade;
     }
 
@@ -170,9 +181,15 @@ public class PortfolioService : IPortfolioService
                 $"Cannot sell {shares} shares of {symbol}; you hold {holding.Quantity}.");
 
         var price = await _marketData.GetCurrentPriceAsync(symbol);
+        if (price <= 0)
+            throw new ValidationException($"Price not found for {symbol}.");
         var proceeds = price * shares;
+        var commission = TradeCostCalculator.EquityCost(proceeds, "SELL");
 
-        await _userRepo.UpdateCashAsync(userId, user.CurrentCash + proceeds);
+        await using var dbContext = await _dbFactory.CreateDbContextAsync();
+        await using var transaction = await dbContext.Database.BeginTransactionAsync();
+
+        await _userRepo.UpdateCashAtomicAsync(userId, proceeds - commission);
 
         var remaining = holding.Quantity - shares;
         if (remaining == 0)
@@ -193,10 +210,13 @@ public class PortfolioService : IPortfolioService
             Quantity = shares,
             Price = price,
             TotalValue = proceeds,
+            Commission = commission,
             Reason = "Manual trade",
             Timestamp = DateTime.UtcNow
         };
         await _tradeRepo.AddAsync(trade);
+        
+        await transaction.CommitAsync();
         return trade;
     }
 
@@ -216,14 +236,15 @@ public class PortfolioService : IPortfolioService
 
         // Options are cash instruments: the cost basis is the premium paid
         // (sizing.py already capped at 10% of cash per idea, whole lots).
-        if (!CanBuy(user, premium, quantity, negativeLimit))
+        var cost = premium * quantity;
+        var commission = TradeCostCalculator.OptionsCost(cost, "BUY");
+        if (!CanBuy(user, premium, quantity, negativeLimit, commission))
             throw new InsufficientFundsException(
                 $"Insufficient cash to buy {quantity} {symbol} {optType} {expiry} "
-                + $"strike {strike} at premium {premium} (cost {premium * quantity}, "
-                + $"cash {user.CurrentCash}).");
+                + $"strike {strike} at premium {premium} (cost {cost} + commission "
+                + $"{commission}, cash {user.CurrentCash}).");
 
-        var cost = premium * quantity;
-        await _userRepo.UpdateCashAsync(userId, user.CurrentCash - cost);
+        await _userRepo.UpdateCashAsync(userId, user.CurrentCash - cost - commission);
         await UpsertHoldingAsync(userId, symbol, quantity, premium, optType, expiry, strike);
 
         var trade = new Trade
@@ -237,6 +258,7 @@ public class PortfolioService : IPortfolioService
             Quantity = quantity,
             Price = premium,
             TotalValue = cost,
+            Commission = commission,
             Reason = "Options signal",
             Timestamp = DateTime.UtcNow
         };
@@ -279,8 +301,9 @@ public class PortfolioService : IPortfolioService
             price = 0m;
         }
         var proceeds = price * quantity;
+        var commission = TradeCostCalculator.OptionsCost(proceeds, "SELL");
 
-        await _userRepo.UpdateCashAsync(userId, user.CurrentCash + proceeds);
+        await _userRepo.UpdateCashAsync(userId, user.CurrentCash + proceeds - commission);
 
         var remaining = holding.Quantity - quantity;
         if (remaining == 0)
@@ -304,6 +327,7 @@ public class PortfolioService : IPortfolioService
             Quantity = quantity,
             Price = price,
             TotalValue = proceeds,
+            Commission = commission,
             Reason = "Options signal",
             Timestamp = DateTime.UtcNow
         };

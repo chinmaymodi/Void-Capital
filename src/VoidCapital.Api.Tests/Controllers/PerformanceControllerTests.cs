@@ -54,8 +54,10 @@ public class PerformanceControllerTests
         var result = await CreateController().GetSignals(userId: 2, model: "sma", page: 1, pageSize: 20);
 
         var ok = result.Result.Should().BeOfType<OkObjectResult>().Subject;
-        var envelope = ok.Value.Should().BeOfType<ApiResponse<object>>().Subject;
+        var envelope = ok.Value.Should().BeOfType<ApiResponse<PagedResult<ResolvedSignalDto>>>().Subject;
         envelope.Success.Should().BeTrue();
+        envelope.Data!.Items.Should().HaveCount(1);
+        envelope.Data.Total.Should().Be(1);
         _signalRepo.Verify(r => r.GetResolvedAsync(
             It.Is<PerformanceQuery>(q => q.UserId == 2 && q.Model == "sma")), Times.Once);
     }

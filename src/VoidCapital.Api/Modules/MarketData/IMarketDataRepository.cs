@@ -16,4 +16,12 @@ public interface IMarketDataRepository
     /// freshness check, D19). Null when the table is empty.
     /// </summary>
     Task<DateTime?> GetLatestIntradayTimestampAsync();
+
+    /// <summary>
+    /// Newest snapshot timestamp in market_data.fo_options_intraday (live
+    /// collector freshness check, F15). The options Greeks/IV rows are the
+    /// input to the IV leg of avg3, so a silent options-collection failure
+    /// must trip the same stale-data path as equities. Null when empty.
+    /// </summary>
+    Task<DateTime?> GetLatestOptionsIntradayTimestampAsync();
 }

@@ -44,6 +44,7 @@ public class SignalJobService : ISignalJobService
     private readonly ILogger<SignalJobService> _logger;
     private readonly ConcurrentDictionary<int, SignalJob> _jobs = new();
     private int _nextId;
+    private int _isRunning; // 0 for false, 1 for true
 
     public SignalJobService(IServiceScopeFactory scopeFactory, ILogger<SignalJobService> logger)
     {
@@ -53,6 +54,11 @@ public class SignalJobService : ISignalJobService
 
     public SignalJob Start()
     {
+        if (Interlocked.CompareExchange(ref _isRunning, 1, 0) != 0)
+        {
+            throw new InvalidOperationException("A signal generation job is already running.");
+        }
+
         var job = new SignalJob
         {
             JobId = Interlocked.Increment(ref _nextId),
@@ -61,7 +67,17 @@ public class SignalJobService : ISignalJobService
         _jobs[job.JobId] = job;
         Prune();
 
-        _ = Task.Run(() => RunAsync(job));
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await RunAsync(job);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _isRunning, 0);
+            }
+        });
         return job;
     }
 

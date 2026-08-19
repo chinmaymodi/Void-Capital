@@ -16,6 +16,7 @@ public static class SettingsMapper
         s.Id,
         s.UserId,
         s.AutoExecute,
+        s.IsHalted,
         s.MinConfidence,
         s.NegativeLimit,
         s.InterestRate,

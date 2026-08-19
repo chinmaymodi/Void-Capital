@@ -76,7 +76,7 @@ describe('SignalPerformance', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedGetModelPerformance.mockResolvedValue(sampleModels);
-    mockedGetResolvedSignals.mockResolvedValue(sampleResolved);
+    mockedGetResolvedSignals.mockResolvedValue({ ...sampleResolved, total: 2 });
   });
 
   afterEach(() => {
@@ -122,6 +122,7 @@ describe('SignalPerformance', () => {
 
   it('shows error state when fetch fails and retries', async () => {
     mockedGetModelPerformance.mockRejectedValueOnce(new Error('boom'));
+    mockedGetResolvedSignals.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 100 });
     const user = userEvent.setup();
 
     render(<SignalPerformance />);
@@ -129,6 +130,7 @@ describe('SignalPerformance', () => {
     expect(await screen.findByText(/boom/i)).toBeInTheDocument();
 
     mockedGetModelPerformance.mockResolvedValue(sampleModels);
+    mockedGetResolvedSignals.mockResolvedValue(sampleResolved);
     await user.click(screen.getByRole('button', { name: /retry/i }));
 
     expect(await screen.findByText('8/10 resolved')).toBeInTheDocument();

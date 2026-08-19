@@ -86,7 +86,7 @@ export function Trades() {
     if (type) params.set('type', type);
     if (from) params.set('from', from);
     if (to) params.set('to', to);
-    window.open(`/api/v1/trades/1/export?${params.toString()}`, '_blank');
+    window.open(`/api/v1/trades/${currentUserId}/export?${params.toString()}`, '_blank');
   };
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / pageSize)) : 1;

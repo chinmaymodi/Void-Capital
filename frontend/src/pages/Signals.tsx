@@ -88,9 +88,13 @@ export function Signals() {
     pausedRef.current = confirmAction !== null;
   }, [confirmAction]);
 
-  const markResult = (result: SignalBatchResult) => {
+  const markResult = (result: SignalBatchResult, action: 'approve' | 'reject') => {
     setSignals((current) =>
-      current.map((s) => (s.id === result.id ? { ...s, status: result.success ? 'APPROVED' : 'FAILED' } : s)),
+      current.map((s) =>
+        s.id === result.id
+          ? { ...s, status: result.success ? (action === 'approve' ? 'APPROVED' : 'REJECTED') : 'FAILED' }
+          : s,
+      ),
     );
     return result.success;
   };
@@ -154,7 +158,7 @@ export function Signals() {
     try {
       const results =
         confirmAction === 'approve' ? await batchApproveSignals(ids) : await batchRejectSignals(ids);
-      results.forEach(markResult);
+      results.forEach((r) => markResult(r, confirmAction));
       const okCount = results.filter((r) => r.success).length;
       showSuccess(
         `${okCount} of ${results.length} signals ${confirmAction === 'approve' ? 'approved' : 'rejected'}`,

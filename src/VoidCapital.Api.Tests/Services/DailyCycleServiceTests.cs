@@ -32,6 +32,8 @@ public class DailyCycleServiceTests
     private readonly Mock<IHoldingRepository> _holdingRepo = new();
     private readonly Mock<ICycleRunRepository> _cycleRunRepo = new();
     private readonly Mock<IProcessRunner> _processRunner = new();
+    private readonly Mock<ICycleLock> _cycleLock = new();
+    private readonly Mock<ICycleLease> _cycleLease = new();
 
     public DailyCycleServiceTests()
     {
@@ -50,6 +52,7 @@ public class DailyCycleServiceTests
         _holdingRepo.Object,
         _cycleRunRepo.Object,
         _processRunner.Object,
+        _cycleLock.Object,
         Options.Create(new PythonSettings { NotificationScriptPath = "" }),
         NullLogger<DailyCycleRunner>.Instance);
 
@@ -84,14 +87,19 @@ public class DailyCycleServiceTests
         _pythonBridge
             .Setup(b => b.RunDataRefreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PythonRunResult(true, "", ""));
+        // DS1: the lock is free by default so the cycle actually runs.
+        _cycleLock
+            .Setup(l => l.TryAcquireAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_cycleLease.Object);
     }
 
     private static UserSettings MakeSettings(int userId, bool autoExecute = false, decimal minConfidence = 0.5m,
-        decimal negativeLimit = 0m, decimal interestRate = 0m) => new()
+        decimal negativeLimit = 0m, decimal interestRate = 0m, bool isHalted = false) => new()
     {
         Id = userId,
         UserId = userId,
         AutoExecute = autoExecute,
+        IsHalted = isHalted,
         MinConfidence = minConfidence,
         NegativeLimit = negativeLimit,
         InterestRate = interestRate,
@@ -190,6 +198,11 @@ public class DailyCycleServiceTests
         _portfolioService
             .Setup(p => p.ExecuteSellAsync(3, "RELIANCE", 10))
             .ReturnsAsync(new Trade { Symbol = "RELIANCE", Quantity = 10, TotalValue = 20000m });
+        // First re-read (post-interest) still below the limit -> margin call
+        // fires; second re-read (post-liquidation) recovered -> no halt.
+        _userRepo.SetupSequence(r => r.GetByIdAsync(3))
+            .ReturnsAsync(new User { Id = 3, CurrentCash = -150000m })
+            .ReturnsAsync(new User { Id = 3, CurrentCash = -50000m });
         _cycleRunRepo.Setup(r => r.AddAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
         _cycleRunRepo.Setup(r => r.UpdateAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
 
@@ -197,6 +210,8 @@ public class DailyCycleServiceTests
 
         Assert.Equal("SUCCEEDED", result.Status);
         _portfolioService.Verify(p => p.ExecuteSellAsync(3, "RELIANCE", 10), Times.Once);
+        // F12: liquidation recovered, agent must NOT be halted.
+        _settingsRepo.Verify(r => r.UpdateAsync(It.Is<UserSettings>(s => s.IsHalted)), Times.Never);
     }
 
     [Fact]
@@ -258,6 +273,276 @@ public class DailyCycleServiceTests
         var result = await CreateRunner().RunAsync();
 
         Assert.Equal("SUCCEEDED", result.Status);
+    }
+
+    [Fact]
+    public async Task RunAsync_MarginCallSellFailure_ContinuesWithRemainingHoldings()
+    {
+        // D1: one un-sellable holding must not strand the rest of the user's
+        // liquidation or abort the cycle.
+        SetupEmptyUsers();
+        _userRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(new[]
+        {
+            new User { Id = 3, Name = "Reckless", CurrentCash = -150000m }
+        });
+        _settingsRepo.Setup(r => r.GetByUserIdAsync(3))
+            .ReturnsAsync(MakeSettings(3, negativeLimit: 100000m, interestRate: 0.0005m));
+        _holdingRepo.Setup(r => r.GetByUserIdAsync(3)).ReturnsAsync(new[]
+        {
+            new Holding { Id = 1, UserId = 3, Symbol = "RELIANCE", Quantity = 10 },
+            new Holding { Id = 2, UserId = 3, Symbol = "HDFCBANK", Quantity = 5 }
+        });
+        _portfolioService
+            .Setup(p => p.ExecuteSellAsync(3, "RELIANCE", 10))
+            .ThrowsAsync(new InvalidOperationException("quote missing"));
+        _portfolioService
+            .Setup(p => p.ExecuteSellAsync(3, "HDFCBANK", 5))
+            .ReturnsAsync(new Trade { Symbol = "HDFCBANK", Quantity = 5, TotalValue = 30000m });
+        // First re-read (post-interest) still below the limit -> margin call
+        // fires; second re-read (post-liquidation) recovered -> no halt.
+        _userRepo.SetupSequence(r => r.GetByIdAsync(3))
+            .ReturnsAsync(new User { Id = 3, CurrentCash = -150000m })
+            .ReturnsAsync(new User { Id = 3, CurrentCash = -40000m });
+        _cycleRunRepo.Setup(r => r.AddAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+        _cycleRunRepo.Setup(r => r.UpdateAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+
+        var result = await CreateRunner().RunAsync();
+
+        // Both sells were attempted; the failing one did not abort the second.
+        _portfolioService.Verify(p => p.ExecuteSellAsync(3, "RELIANCE", 10), Times.Once);
+        _portfolioService.Verify(p => p.ExecuteSellAsync(3, "HDFCBANK", 5), Times.Once);
+        Assert.Equal("SUCCEEDED", result.Status);
+    }
+
+    [Fact]
+    public async Task RunAsync_AutoExecuteFailure_ContinuesWithOtherUsers()
+    {
+        // D1: one user's execution failure must not skip the remaining users.
+        SetupEmptyUsers();
+        _settingsRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(new[]
+        {
+            MakeSettings(2, autoExecute: true, minConfidence: 0.5m),
+            MakeSettings(3, autoExecute: true, minConfidence: 0.5m)
+        });
+        _signalRepo.Setup(r => r.GetTodaySignalsAsync(2)).ReturnsAsync(new[]
+        {
+            MakeSignal(1, 2, confidence: 0.7m)
+        });
+        _signalRepo.Setup(r => r.GetTodaySignalsAsync(3)).ReturnsAsync(new[]
+        {
+            MakeSignal(2, 3, confidence: 0.8m)
+        });
+        _signalService
+            .Setup(s => s.BatchApproveAsync(new[] { 1 }))
+            .ThrowsAsync(new InvalidOperationException("execution exploded"));
+        _signalService
+            .Setup(s => s.BatchApproveAsync(new[] { 2 }))
+            .ReturnsAsync(new[] { SignalBatchResult.Ok(2) });
+        _cycleRunRepo.Setup(r => r.AddAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+        _cycleRunRepo.Setup(r => r.UpdateAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+
+        var result = await CreateRunner().RunAsync();
+
+        _signalService.Verify(s => s.BatchApproveAsync(new[] { 1 }), Times.Once);
+        _signalService.Verify(s => s.BatchApproveAsync(new[] { 2 }), Times.Once);
+        Assert.Equal("SUCCEEDED", result.Status);
+        // User 2's failure is logged, not counted as executed.
+        Assert.Equal(1, result.SignalsExecuted);
+    }
+
+    [Fact]
+    public async Task RunAsync_SnapshotFailure_ContinuesWithOtherUsers()
+    {
+        // D1: a PnL snapshot failure for one user must not skip the rest.
+        SetupEmptyUsers();
+        _userRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(new[]
+        {
+            new User { Id = 1, Name = "A", CurrentCash = 1000m },
+            new User { Id = 2, Name = "B", CurrentCash = 2000m }
+        });
+        _portfolioService
+            .Setup(p => p.RecordDailySnapshotAsync(1))
+            .ThrowsAsync(new InvalidOperationException("snapshot exploded"));
+        _portfolioService
+            .Setup(p => p.RecordDailySnapshotAsync(2))
+            .Returns(Task.CompletedTask);
+        _cycleRunRepo.Setup(r => r.AddAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+        _cycleRunRepo.Setup(r => r.UpdateAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+
+        var result = await CreateRunner().RunAsync();
+
+        _portfolioService.Verify(p => p.RecordDailySnapshotAsync(1), Times.Once);
+        _portfolioService.Verify(p => p.RecordDailySnapshotAsync(2), Times.Once);
+        Assert.Equal("SUCCEEDED", result.Status);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenLockHeld_SkipsWithoutRecordingRun()
+    {
+        // DS1: another instance holds the advisory lock -> skip, no run row,
+        // no pipeline work.
+        SetupEmptyUsers();
+        _cycleLock
+            .Setup(l => l.TryAcquireAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ICycleLease?)null);
+        _cycleRunRepo.Setup(r => r.AddAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+
+        var result = await CreateRunner().RunAsync();
+
+        Assert.Equal("SKIPPED", result.Status);
+        _cycleRunRepo.Verify(r => r.AddAsync(It.IsAny<CycleRun>()), Times.Never);
+        _signalIntegration.Verify(s => s.RunForAllUsersAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RunAsync_MarginCall_DetectsBreachCausedByInterest()
+    {
+        // D2: pre-interest cash (-99999.99) is above the -100000 limit; the
+        // interest charge pushes it below. The margin call must fire today.
+        SetupEmptyUsers();
+        _userRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(new[]
+        {
+            new User { Id = 3, Name = "Reckless", CurrentCash = -99999.99m }
+        });
+        _settingsRepo.Setup(r => r.GetByUserIdAsync(3))
+            .ReturnsAsync(MakeSettings(3, negativeLimit: 100000m, interestRate: 0.0005m));
+        // Post-interest re-read: -99999.99 - (-99999.99 * 0.0005 / 365) is
+        // just under -100000, so the re-read crosses the limit. The second
+        // call is the F12 post-liquidation re-read: proceeds recovered.
+        _userRepo.SetupSequence(r => r.GetByIdAsync(3))
+            .ReturnsAsync(new User { Id = 3, CurrentCash = -100000.13m })
+            .ReturnsAsync(new User { Id = 3, CurrentCash = -50000m });
+        _holdingRepo.Setup(r => r.GetByUserIdAsync(3)).ReturnsAsync(new[]
+        {
+            new Holding { Id = 1, UserId = 3, Symbol = "RELIANCE", Quantity = 10 }
+        });
+        _portfolioService
+            .Setup(p => p.ExecuteSellAsync(3, "RELIANCE", 10))
+            .ReturnsAsync(new Trade { Symbol = "RELIANCE", Quantity = 10, TotalValue = 20000m });
+        _cycleRunRepo.Setup(r => r.AddAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+        _cycleRunRepo.Setup(r => r.UpdateAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+
+        var result = await CreateRunner().RunAsync();
+
+        Assert.Equal("SUCCEEDED", result.Status);
+        _portfolioService.Verify(p => p.ExecuteSellAsync(3, "RELIANCE", 10), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_HaltedUser_NoAutoExecute()
+    {
+        // F12: a halted agent is terminal - auto-execute is skipped even when
+        // AutoExecute is true, so its signals are never even fetched.
+        SetupEmptyUsers();
+        _settingsRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(new[]
+        {
+            MakeSettings(2, autoExecute: true, minConfidence: 0.5m, isHalted: true),
+            MakeSettings(3, autoExecute: true, minConfidence: 0.5m)
+        });
+        _signalRepo.Setup(r => r.GetTodaySignalsAsync(3)).ReturnsAsync(new[]
+        {
+            MakeSignal(1, 3, confidence: 0.7m)
+        });
+        _signalService
+            .Setup(s => s.BatchApproveAsync(new[] { 1 }))
+            .ReturnsAsync(new[] { SignalBatchResult.Ok(1) });
+        _cycleRunRepo.Setup(r => r.AddAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+        _cycleRunRepo.Setup(r => r.UpdateAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+
+        var result = await CreateRunner().RunAsync();
+
+        Assert.Equal("SUCCEEDED", result.Status);
+        Assert.Equal(1, result.SignalsExecuted);
+        // User 2 is halted: its signals must never be fetched or executed.
+        _signalRepo.Verify(r => r.GetTodaySignalsAsync(2), Times.Never);
+    }
+
+    [Fact]
+    public async Task RunAsync_HaltedUser_NoInterestNoMarginCall()
+    {
+        // F12: halted agents freeze - no interest accrual on the deficit and
+        // no further margin calls (the liquidation already failed once).
+        SetupEmptyUsers();
+        _userRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(new[]
+        {
+            new User { Id = 3, Name = "Reckless", CurrentCash = -150000m }
+        });
+        _settingsRepo.Setup(r => r.GetByUserIdAsync(3))
+            .ReturnsAsync(MakeSettings(3, negativeLimit: 100000m, interestRate: 0.0005m, isHalted: true));
+        _cycleRunRepo.Setup(r => r.AddAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+        _cycleRunRepo.Setup(r => r.UpdateAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+
+        await CreateRunner().RunAsync();
+
+        _userRepo.Verify(r => r.UpdateCashAsync(3, It.IsAny<decimal>()), Times.Never);
+        _holdingRepo.Verify(r => r.GetByUserIdAsync(3), Times.Never);
+        _portfolioService.Verify(p => p.ExecuteSellAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<int>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RunAsync_FailedLiquidation_HaltsAgent()
+    {
+        // F12 terminal rule: the margin call squares off, but the deficit
+        // survives the liquidation (cash still below the negative limit).
+        // The agent is dead - halt it so it stops trading and stops accruing
+        // interest on the permanent deficit. Admin revive only.
+        SetupEmptyUsers();
+        _userRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(new[]
+        {
+            new User { Id = 3, Name = "Reckless", CurrentCash = -150000m }
+        });
+        _settingsRepo.Setup(r => r.GetByUserIdAsync(3))
+            .ReturnsAsync(MakeSettings(3, negativeLimit: 100000m, interestRate: 0.0005m));
+        _holdingRepo.Setup(r => r.GetByUserIdAsync(3)).ReturnsAsync(new[]
+        {
+            new Holding { Id = 1, UserId = 3, Symbol = "RELIANCE", Quantity = 10 }
+        });
+        _portfolioService
+            .Setup(p => p.ExecuteSellAsync(3, "RELIANCE", 10))
+            .ReturnsAsync(new Trade { Symbol = "RELIANCE", Quantity = 10, TotalValue = 20000m });
+        // Post-liquidation re-read: proceeds did NOT cover the deficit.
+        _userRepo.Setup(r => r.GetByIdAsync(3))
+            .ReturnsAsync(new User { Id = 3, CurrentCash = -120000m });
+        _cycleRunRepo.Setup(r => r.AddAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+        _cycleRunRepo.Setup(r => r.UpdateAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+
+        var result = await CreateRunner().RunAsync();
+
+        Assert.Equal("SUCCEEDED", result.Status);
+        _portfolioService.Verify(p => p.ExecuteSellAsync(3, "RELIANCE", 10), Times.Once);
+        // The settings row is persisted with the terminal flag set.
+        _settingsRepo.Verify(r => r.UpdateAsync(It.Is<UserSettings>(s =>
+            s.UserId == 3 && s.IsHalted)), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_FailedLiquidation_NoHoldings_HaltsAgent()
+    {
+        // F13: holdings < deficit. The agent has nothing to sell, so the
+        // square-off cannot recover the deficit. The post-square-off recheck
+        // (F12 terminal rule) must halt it immediately - otherwise the cycle
+        // repeats the same losing square-off daily.
+        SetupEmptyUsers();
+        _userRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(new[]
+        {
+            new User { Id = 3, Name = "Reckless", CurrentCash = -150000m }
+        });
+        _settingsRepo.Setup(r => r.GetByUserIdAsync(3))
+            .ReturnsAsync(MakeSettings(3, negativeLimit: 100000m, interestRate: 0.0005m));
+        // No holdings: the liquidation sells nothing.
+        _holdingRepo.Setup(r => r.GetByUserIdAsync(3)).ReturnsAsync(Array.Empty<Holding>());
+        // Post-liquidation re-read: cash unchanged, still below the limit.
+        _userRepo.Setup(r => r.GetByIdAsync(3))
+            .ReturnsAsync(new User { Id = 3, CurrentCash = -150000m });
+        _cycleRunRepo.Setup(r => r.AddAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+        _cycleRunRepo.Setup(r => r.UpdateAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+
+        var result = await CreateRunner().RunAsync();
+
+        Assert.Equal("SUCCEEDED", result.Status);
+        _portfolioService.Verify(p => p.ExecuteSellAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<int>()), Times.Never);
+        _settingsRepo.Verify(r => r.UpdateAsync(It.Is<UserSettings>(s =>
+            s.UserId == 3 && s.IsHalted)), Times.Once);
     }
 
     [Fact]

@@ -35,4 +35,6 @@ public record SquareOffResultDto(
 /// </summary>
 public record GlobalSettingsRequest(
     [Range(0.0, 1.0)] decimal MinConfidence,
+    [Range(0.0, double.MaxValue)] decimal NegativeLimit,
+    [Range(0.0, 0.5)] decimal InterestRate,
     string[] Watchlist);

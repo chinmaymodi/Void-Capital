@@ -65,13 +65,23 @@ public class IntegrationFactory : WebApplicationFactory<Program>, IAsyncLifetime
         });
     }
 
+    /// <summary>
+    /// Client that sends the admin API key on every request, so integration
+    /// tests exercise the authenticated endpoints (A1-class auth).
+    /// </summary>
+    public HttpClient CreateAuthedClient()
+    {
+        var handler = new AuthHeaderHandler { InnerHandler = Server.CreateHandler() };
+        return new HttpClient(handler) { BaseAddress = new Uri("http://localhost") };
+    }
+
     public async Task<AppDbContext> CreateDbAsync() =>
         await DbFactory.CreateDbContextAsync();
 
     /// <summary>Always-succeed bridge: instant, environment-independent.</summary>
     private sealed class StubPythonBridge : IPythonBridge
     {
-        public Task<PythonRunResult> RunSignalGeneration(int userId, bool noGate, CancellationToken ct = default) =>
+        public Task<PythonRunResult> RunSignalGeneration(int userId, CancellationToken ct = default) =>
             Task.FromResult(new PythonRunResult(true, "0", ""));
 
         public Task<PythonRunResult> RunDataRefreshAsync(CancellationToken ct = default) =>
@@ -86,3 +96,11 @@ public class IntegrationFactory : WebApplicationFactory<Program>, IAsyncLifetime
 /// </summary>
 [CollectionDefinition("integration")]
 public class IntegrationCollection : ICollectionFixture<IntegrationFactory>;
+
+/// <summary>
+/// Migration-seed tests get their own factory (own containers, own migrated
+/// DB) so they can assert data seeded by migrations without other tests
+/// mutating it first (e.g. global settings PUTs clobber every user's row).
+/// </summary>
+[CollectionDefinition("migration")]
+public class MigrationCollection : ICollectionFixture<IntegrationFactory>;

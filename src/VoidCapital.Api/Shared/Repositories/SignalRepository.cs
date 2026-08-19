@@ -26,10 +26,13 @@ public class SignalRepository : ISignalRepository
     public async Task<IEnumerable<Signal>> GetTodaySignalsAsync(int userId)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        // SR1: signals are written by the Python pipeline with the IST trading
+        // date (cycle runs post-close at 12:30 UTC = 18:30 IST, so the UTC and
+        // IST calendar dates normally coincide). Use IST to match.
+        var istToday = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5.5));
         return await db.Signals
             .Include(s => s.Performance)
-            .Where(s => s.UserId == userId && s.Date == today && s.Status == SignalStatus.PENDING)
+            .Where(s => s.UserId == userId && s.Date == istToday && s.Status == SignalStatus.PENDING)
             .OrderByDescending(s => s.Confidence)
             .ToListAsync();
     }

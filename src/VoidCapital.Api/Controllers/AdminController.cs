@@ -1,48 +1,26 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using VoidCapital.Api.Modules.Portfolio;
 using VoidCapital.Api.Modules.Portfolio.DTOs;
-using VoidCapital.Api.Modules.Portfolio.Models;
-using VoidCapital.Api.Modules.Signals;
 using VoidCapital.Api.Modules.Signals.DTOs;
-using VoidCapital.Api.Modules.Signals.Models;
-using VoidCapital.Api.Modules.Signals.Services;
 using VoidCapital.Api.Services;
 using VoidCapital.Api.Shared;
-using VoidCapital.Api.Shared.Repositories;
 
 namespace VoidCapital.Api.Controllers;
 
+/// <summary>
+/// Thin HTTP mapping layer (A3): all orchestration lives in IAdminService so
+/// the business logic is unit-testable without MVC plumbing.
+/// </summary>
 [ApiController]
 [Route("api/v1/[controller]")]
+[Authorize(Roles = "Admin")]
 public class AdminController : ControllerBase
 {
-    private readonly ISignalRepository _signalRepo;
-    private readonly ISignalPerformanceRepository _performanceRepo;
-    private readonly ISettingsRepository _settingsRepo;
-    private readonly IUserRepository _userRepo;
-    private readonly IHoldingRepository _holdingRepo;
-    private readonly IPortfolioService _portfolioService;
-    private readonly ISignalIntegrationService _signalIntegration;
-    private readonly ISignalJobService _signalJobService;
+    private readonly IAdminService _admin;
 
-    public AdminController(
-        ISignalRepository signalRepo,
-        ISignalPerformanceRepository performanceRepo,
-        ISettingsRepository settingsRepo,
-        IUserRepository userRepo,
-        IHoldingRepository holdingRepo,
-        IPortfolioService portfolioService,
-        ISignalIntegrationService signalIntegration,
-        ISignalJobService signalJobService)
+    public AdminController(IAdminService admin)
     {
-        _signalRepo = signalRepo;
-        _performanceRepo = performanceRepo;
-        _settingsRepo = settingsRepo;
-        _userRepo = userRepo;
-        _holdingRepo = holdingRepo;
-        _portfolioService = portfolioService;
-        _signalIntegration = signalIntegration;
-        _signalJobService = signalJobService;
+        _admin = admin;
     }
 
     /// <summary>
@@ -52,62 +30,13 @@ public class AdminController : ControllerBase
     /// </summary>
     [HttpPost("ingest-signals")]
     public async Task<ActionResult<ApiResponse<IEnumerable<SignalDto>>>> IngestSignals(
-        [FromBody] IEnumerable<IngestSignalRequest> requests)
-    {
-        var results = new List<SignalDto>();
-
-        foreach (var request in requests)
-        {
-            if (request.UserId is null)
-                throw new ValidationException("Signal is missing userId.");
-
-            var signal = new Signal
-            {
-                UserId = request.UserId.Value,
-                Date = DateOnly.FromDateTime(DateTime.UtcNow),
-                InstrumentType = string.IsNullOrWhiteSpace(request.InstrumentType)
-                    ? "EQ"
-                    : request.InstrumentType.Trim().ToUpperInvariant(),
-                Symbol = request.Symbol,
-                Expiry = request.Expiry,
-                Strike = request.Strike,
-                ModelName = request.ModelName,
-                Action = request.Action,
-                Confidence = request.Confidence,
-                Reason = request.Reason,
-                SuggestedQuantity = request.SuggestedQuantity,
-                Status = SignalStatus.PENDING
-            };
-
-            signal = await _signalRepo.AddAsync(signal);
-
-            var performance = new SignalPerformance
-            {
-                SignalId = signal.Id,
-                EntryPrice = request.EntryPrice ?? 0m,
-                TargetPrice = request.TargetPrice,
-                StopLoss = request.StopLoss,
-                Outcome = "PENDING",
-                EvaluationDays = 5,
-                CreatedAt = DateTime.UtcNow
-            };
-            await _performanceRepo.AddAsync(performance);
-
-            results.Add(SignalDto.From(signal));
-        }
-
-        return Ok(ApiResponse<IEnumerable<SignalDto>>.Ok(results));
-    }
+        [FromBody] IEnumerable<IngestSignalRequest> requests, CancellationToken ct)
+        => Ok(ApiResponse<IEnumerable<SignalDto>>.Ok(await _admin.IngestSignalsAsync(requests, ct)));
 
     /// <summary>Read one user's settings row (used for system-user config).</summary>
     [HttpGet("settings/{userId:int}")]
-    public async Task<ActionResult<ApiResponse<SettingsDto>>> GetSettings(int userId)
-    {
-        var settings = await _settingsRepo.GetByUserIdAsync(userId)
-            ?? throw new NotFoundException($"Settings for user {userId} were not found.");
-
-        return Ok(ApiResponse<SettingsDto>.Ok(SettingsMapper.ToDto(settings)));
-    }
+    public async Task<ActionResult<ApiResponse<SettingsDto>>> GetSettings(int userId, CancellationToken ct)
+        => Ok(ApiResponse<SettingsDto>.Ok(await _admin.GetSettingsAsync(userId, ct)));
 
     /// <summary>
     /// Update a user's settings (negative limit, interest rate, auto-execute,
@@ -116,43 +45,18 @@ public class AdminController : ControllerBase
     /// </summary>
     [HttpPut("settings/{userId:int}")]
     public async Task<ActionResult<ApiResponse<SettingsDto>>> UpdateSettings(
-        int userId, [FromBody] UpdateSettingsRequest request)
-    {
-        var settings = await _settingsRepo.GetByUserIdAsync(userId)
-            ?? throw new NotFoundException($"Settings for user {userId} were not found.");
-
-        settings.AutoExecute = request.AutoExecute;
-        settings.MinConfidence = request.MinConfidence;
-        settings.NegativeLimit = request.NegativeLimit;
-        settings.InterestRate = request.InterestRate;
-        settings.Watchlist = SettingsMapper.SerializeWatchlist(request.Watchlist);
-
-        await _settingsRepo.UpdateAsync(settings);
-        return Ok(ApiResponse<SettingsDto>.Ok(SettingsMapper.ToDto(settings)));
-    }
+        int userId, [FromBody] UpdateSettingsRequest request, CancellationToken ct)
+        => Ok(ApiResponse<SettingsDto>.Ok(await _admin.UpdateSettingsAsync(userId, request, ct)));
 
     /// <summary>
-    /// Apply global configuration (min confidence + default watchlist) to every
-    /// user's settings row. There is no dedicated global-config table; the
-    /// settings table is the single source of truth.
+    /// Apply global configuration (min confidence, negative limit, interest rate,
+    /// + default watchlist) to every user's settings row. There is no dedicated
+    /// global-config table; the settings table is the single source of truth.
     /// </summary>
     [HttpPut("settings/global")]
     public async Task<ActionResult<ApiResponse<IEnumerable<SettingsDto>>>> UpdateGlobalSettings(
-        [FromBody] GlobalSettingsRequest request)
-    {
-        var all = (await _settingsRepo.GetAllAsync()).ToList();
-        foreach (var settings in all)
-        {
-            settings.MinConfidence = request.MinConfidence;
-            settings.Watchlist = SettingsMapper.SerializeWatchlist(request.Watchlist);
-        }
-
-        foreach (var settings in all)
-            await _settingsRepo.UpdateAsync(settings);
-
-        var dtos = all.Select(SettingsMapper.ToDto).ToList();
-        return Ok(ApiResponse<IEnumerable<SettingsDto>>.Ok(dtos));
-    }
+        [FromBody] GlobalSettingsRequest request, CancellationToken ct)
+        => Ok(ApiResponse<IEnumerable<SettingsDto>>.Ok(await _admin.UpdateGlobalSettingsAsync(request, ct)));
 
     /// <summary>
     /// Manual margin call: sell every holding of the user at market price, then
@@ -160,80 +64,16 @@ public class AdminController : ControllerBase
     /// debt, the residual is written off (cash floors at zero).
     /// </summary>
     [HttpPost("square-off/{userId:int}")]
-    public async Task<ActionResult<ApiResponse<SquareOffResultDto>>> SquareOff(int userId)
-    {
-        var user = await _userRepo.GetByIdAsync(userId)
-            ?? throw new NotFoundException($"User with id {userId} was not found.");
-        _ = user; // validated above; the sell loop below mutates via the service.
-
-        var holdings = await _holdingRepo.GetByUserIdAsync(userId);
-        var positionsSold = 0;
-        var proceeds = 0m;
-
-        foreach (var holding in holdings)
-        {
-            // D16: options holdings square off via the contract-keyed path.
-            Trade trade;
-            if (holding.InstrumentType == "EQ" || holding.Expiry is null || holding.Strike is null)
-            {
-                trade = await _portfolioService.ExecuteSellAsync(userId, holding.Symbol, holding.Quantity);
-            }
-            else
-            {
-                trade = await _portfolioService.ExecuteOptionsSellAsync(
-                    userId, holding.Symbol, holding.InstrumentType,
-                    holding.Expiry.Value, holding.Strike.Value, holding.Quantity);
-            }
-            positionsSold++;
-            proceeds += trade.TotalValue;
-        }
-
-        // ExecuteSellAsync already credited proceeds to cash; re-read the
-        // balance and absorb any residual debt (cash floors at zero).
-        var afterLiquidation = await _userRepo.GetByIdAsync(userId);
-        var remainingCash = afterLiquidation?.CurrentCash ?? 0m;
-        if (remainingCash < 0)
-        {
-            await _userRepo.UpdateCashAsync(userId, 0);
-            remainingCash = 0;
-        }
-
-        var result = new SquareOffResultDto(userId, positionsSold, proceeds, remainingCash);
-        return Ok(ApiResponse<SquareOffResultDto>.Ok(result));
-    }
+    public async Task<ActionResult<ApiResponse<SquareOffResultDto>>> SquareOff(int userId, CancellationToken ct)
+        => Ok(ApiResponse<SquareOffResultDto>.Ok(await _admin.SquareOffAsync(userId, ct)));
 
     /// <summary>
     /// Overall system status: pending signal count plus a per-user balance
     /// report (cash, total value, return vs starting budget).
     /// </summary>
     [HttpGet("status")]
-    public async Task<ActionResult<ApiResponse<AdminStatusDto>>> GetStatus()
-    {
-        var users = await _userRepo.GetAllAsync();
-        var counts = await _signalRepo.GetStatusCountsAsync();
-
-        var balances = new List<UserBalanceDto>();
-        foreach (var user in users)
-        {
-            var state = await _portfolioService.GetPortfolioStateAsync(user.Id);
-            var totalReturn = state.TotalValue - user.StartingBudget;
-
-            balances.Add(new UserBalanceDto(
-                user.Id,
-                user.Name,
-                state.Cash,
-                state.TotalValue,
-                totalReturn,
-                user.StartingBudget > 0 ? totalReturn / user.StartingBudget : 0m));
-        }
-
-        var status = new AdminStatusDto(
-            DateTime.UtcNow,
-            counts.GetValueOrDefault(SignalStatus.PENDING),
-            balances);
-
-        return Ok(ApiResponse<AdminStatusDto>.Ok(status));
-    }
+    public async Task<ActionResult<ApiResponse<AdminStatusDto>>> GetStatus(CancellationToken ct)
+        => Ok(ApiResponse<AdminStatusDto>.Ok(await _admin.GetStatusAsync(ct)));
 
     /// <summary>
     /// Kicks off signal generation for every user (from settings rows) as a
@@ -243,25 +83,17 @@ public class AdminController : ControllerBase
     /// </summary>
     [HttpPost("run-signals")]
     public ActionResult<ApiResponse<SignalJobDto>> RunSignals()
-    {
-        var job = _signalJobService.Start();
-        return Accepted(ApiResponse<SignalJobDto>.Ok(SignalJobDto.From(job)));
-    }
+        => Accepted(ApiResponse<SignalJobDto>.Ok(_admin.StartSignalJob()));
 
     /// <summary>Status of an async signal-generation job.</summary>
     [HttpGet("run-signals/{jobId:int}")]
     public ActionResult<ApiResponse<SignalJobDto>> GetRunSignalsStatus(int jobId)
-    {
-        var job = _signalJobService.Get(jobId)
-            ?? throw new NotFoundException($"Signal generation job {jobId} was not found.");
-        return Ok(ApiResponse<SignalJobDto>.Ok(SignalJobDto.From(job)));
-    }
+        => Ok(ApiResponse<SignalJobDto>.Ok(_admin.GetSignalJob(jobId)));
 
     [HttpPost("run-daily-cycle")]
-    public async Task<ActionResult<ApiResponse<string>>> RunDailyCycle()
+    public async Task<ActionResult<ApiResponse<string>>> RunDailyCycle(CancellationToken ct)
     {
-        var runner = HttpContext.RequestServices.GetRequiredService<IDailyCycleRunner>();
-        var result = await runner.RunAsync();
+        var result = await _admin.RunDailyCycleAsync(ct);
         if (result.Status == "FAILED")
             return StatusCode(500, ApiResponse<string>.Fail($"Daily cycle failed: {result.Error}"));
 

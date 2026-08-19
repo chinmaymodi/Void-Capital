@@ -60,6 +60,16 @@ public class IntradayCycleService : BackgroundService
         return utcNow < open ? open : open.AddDays(1);
     }
 
+    /// <summary>
+    /// True when either intraday feed is missing or stale. F15: both the
+    /// equity bars (stocks_intraday_1m) and the options snapshots
+    /// (fo_options_intraday, the IV leg of avg3) must be fresh; a silent
+    /// options-collection failure must trip the same stale path as equities.
+    /// </summary>
+    public static bool IsStale(DateTime? latestEquity, DateTime? latestOptions, DateTime utcNow) =>
+        latestEquity is null || utcNow - latestEquity.Value > StaleThreshold ||
+        latestOptions is null || utcNow - latestOptions.Value > StaleThreshold;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -90,31 +100,31 @@ public class IntradayCycleService : BackgroundService
 
     private async Task CheckAndCollectAsync(CancellationToken ct)
     {
-        DateTime? latest;
+        DateTime? latestEquity;
+        DateTime? latestOptions;
         using (var scope = _serviceProvider.CreateScope())
         {
             var repo = scope.ServiceProvider.GetRequiredService<IMarketDataRepository>();
-            latest = await repo.GetLatestIntradayTimestampAsync();
+            latestEquity = await repo.GetLatestIntradayTimestampAsync();
+            latestOptions = await repo.GetLatestOptionsIntradayTimestampAsync();
         }
 
-        if (latest is null)
-        {
-            _logger.LogWarning("No intraday bars found; launching collector");
-            await LaunchCollectorAsync(ct);
-            return;
-        }
-
-        var age = DateTime.UtcNow - latest.Value;
-        if (age > StaleThreshold)
+        // F15: both feeds must be fresh. The options Greeks/IV rows in
+        // fo_options_intraday feed the IV leg of avg3; a silent
+        // options-collection failure must trip the same stale-data path as
+        // equities, otherwise the IV feature silently freezes on old data.
+        if (IsStale(latestEquity, latestOptions, DateTime.UtcNow))
         {
             _logger.LogWarning(
-                "Intraday data stale (latest bar {Latest:O}, age {Age}); launching collector",
-                latest.Value, age);
+                "Intraday data stale (equity latest {Equity}, options latest {Options}); launching collector",
+                latestEquity?.ToString("O") ?? "none", latestOptions?.ToString("O") ?? "none");
             await LaunchCollectorAsync(ct);
         }
         else
         {
-            _logger.LogInformation("Intraday data fresh (latest bar {Latest:O})", latest.Value);
+            _logger.LogInformation(
+                "Intraday data fresh (equity latest {Equity:O}, options latest {Options:O})",
+                latestEquity.Value, latestOptions.Value);
         }
     }
 
@@ -128,24 +138,23 @@ public class IntradayCycleService : BackgroundService
 
         // IProcessRunner is scoped; hosted services resolve from the root
         // provider, so grab it from a scope like DailyCycleService does.
-        IProcessRunner processRunner;
         using (var scope = _serviceProvider.CreateScope())
         {
-            processRunner = scope.ServiceProvider.GetRequiredService<IProcessRunner>();
-        }
+            var processRunner = scope.ServiceProvider.GetRequiredService<IProcessRunner>();
 
-        var (exitCode, _, error) = await processRunner.RunAsync(
-            _pythonSettings.PythonPath,
-            $"\"{_pythonSettings.CollectLiveScriptPath}\"",
-            ct, CollectTimeout);
+            var (exitCode, _, error) = await processRunner.RunAsync(
+                _pythonSettings.PythonPath,
+                $"\"{_pythonSettings.CollectLiveScriptPath}\"",
+                ct, CollectTimeout);
 
-        if (exitCode == 0)
-        {
-            _logger.LogInformation("Collector launched successfully");
-        }
-        else
-        {
-            _logger.LogWarning("Collector exited {ExitCode}: {Error}", exitCode, error);
+            if (exitCode == 0)
+            {
+                _logger.LogInformation("Collector launched successfully");
+            }
+            else
+            {
+                _logger.LogWarning("Collector exited {ExitCode}: {Error}", exitCode, error);
+            }
         }
     }
 }

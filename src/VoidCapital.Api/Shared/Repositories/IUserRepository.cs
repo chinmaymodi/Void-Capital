@@ -7,4 +7,5 @@ public interface IUserRepository
     Task<User?> GetByIdAsync(int id);
     Task<IEnumerable<User>> GetAllAsync();
     Task<int> UpdateCashAsync(int userId, decimal newCash);
+    Task<int> UpdateCashAtomicAsync(int userId, decimal delta);
 }

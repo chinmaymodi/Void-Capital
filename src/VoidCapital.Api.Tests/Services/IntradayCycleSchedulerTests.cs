@@ -67,4 +67,56 @@ public class IntradayCycleSchedulerTests
         var next = IntradayCycleService.NextMarketOpen(now);
         Assert.Equal(new DateTime(2026, 8, 14, 3, 45, 0, DateTimeKind.Utc), next);
     }
+
+    // ---------- F15: dual-feed freshness (equities + options) ----------
+
+    private static readonly DateTime Now = new(2026, 8, 13, 6, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public void IsStale_FalseWhenBothFeedsFresh()
+    {
+        var fresh = Now.AddMinutes(-1);
+        Assert.False(IntradayCycleService.IsStale(fresh, fresh, Now));
+    }
+
+    [Fact]
+    public void IsStale_TrueWhenEquityFeedMissing()
+    {
+        var fresh = Now.AddMinutes(-1);
+        Assert.True(IntradayCycleService.IsStale(null, fresh, Now));
+    }
+
+    [Fact]
+    public void IsStale_TrueWhenOptionsFeedMissing()
+    {
+        // F15: the options snapshot table is empty - a silent
+        // options-collection failure must trip the stale path even though
+        // the equity bars are fresh.
+        var fresh = Now.AddMinutes(-1);
+        Assert.True(IntradayCycleService.IsStale(fresh, null, Now));
+    }
+
+    [Fact]
+    public void IsStale_TrueWhenEquityFeedStale()
+    {
+        var fresh = Now.AddMinutes(-1);
+        var stale = Now.AddMinutes(-10); // > 5-minute threshold
+        Assert.True(IntradayCycleService.IsStale(stale, fresh, Now));
+    }
+
+    [Fact]
+    public void IsStale_TrueWhenOptionsFeedStale()
+    {
+        // F15: equity bars fresh but options snapshots frozen - the IV leg
+        // of avg3 would silently compute on stale Greeks.
+        var fresh = Now.AddMinutes(-1);
+        var stale = Now.AddMinutes(-10);
+        Assert.True(IntradayCycleService.IsStale(fresh, stale, Now));
+    }
+
+    [Fact]
+    public void IsStale_TrueWhenBothFeedsMissing()
+    {
+        Assert.True(IntradayCycleService.IsStale(null, null, Now));
+    }
 }

@@ -1,6 +1,6 @@
 // Layout shell: sidebar nav + header total fetched on mount.
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +8,7 @@ import { Layout } from './Layout';
 import { UserProvider } from '../context/UserProvider';
 import { getPortfolio, getUsers } from '../services/api';
 import { ToastProvider } from './Toast';
+import { useToast } from './useToast';
 
 vi.mock('../services/api');
 
@@ -22,6 +23,29 @@ function renderLayout() {
           <Routes>
             <Route element={<Layout />}>
               <Route path="/holdings" element={<div>Holdings page</div>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </UserProvider>
+    </ToastProvider>,
+  );
+}
+
+// Outlet content that can fire a toast, to prove toasts do not re-trigger the
+// Layout's portfolio-total effect (W2).
+function ToastTrigger() {
+  const { showError } = useToast();
+  return <button onClick={() => showError('toast!')}>toast</button>;
+}
+
+function renderLayoutWithToastTrigger() {
+  return render(
+    <ToastProvider>
+      <UserProvider>
+        <MemoryRouter initialEntries={['/holdings']}>
+          <Routes>
+            <Route element={<Layout />}>
+              <Route path="/holdings" element={<ToastTrigger />} />
             </Route>
           </Routes>
         </MemoryRouter>
@@ -94,5 +118,25 @@ describe('Layout', () => {
       expect(mockedGetPortfolio).toHaveBeenCalledWith(2);
     });
     expect(screen.getByTestId('header-total')).toHaveTextContent('₹2,00,000');
+  });
+
+  it('does not refetch the portfolio total when a toast fires (W2)', async () => {
+    mockedGetPortfolio.mockResolvedValue({ cash: 0, holdingsValue: 0, totalValue: 106150 });
+    renderLayoutWithToastTrigger();
+
+    await waitFor(() => {
+      expect(mockedGetPortfolio).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'toast' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('toast!');
+
+    // Give any spurious refetch (old behavior: showError identity changed on
+    // every toast, re-firing the effect) a chance to run, then assert it did
+    // not.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    expect(mockedGetPortfolio).toHaveBeenCalledTimes(1);
   });
 });

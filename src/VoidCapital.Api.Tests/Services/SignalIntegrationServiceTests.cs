@@ -38,7 +38,7 @@ public class SignalIntegrationServiceTests
         summary.UsersProcessed.Should().Be(0);
         summary.UsersSucceeded.Should().Be(0);
         summary.AllSucceeded.Should().BeTrue();
-        _bridge.Verify(b => b.RunSignalGeneration(It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
+        _bridge.Verify(b => b.RunSignalGeneration(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -48,7 +48,7 @@ public class SignalIntegrationServiceTests
         {
             MakeSettings(1), MakeSettings(2)
         });
-        _bridge.Setup(b => b.RunSignalGeneration(It.IsAny<int>(), false, It.IsAny<CancellationToken>()))
+        _bridge.Setup(b => b.RunSignalGeneration(It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Ok());
 
         var summary = await CreateService().RunForAllUsersAsync();
@@ -66,7 +66,7 @@ public class SignalIntegrationServiceTests
         {
             MakeSettings(1)
         });
-        _bridge.Setup(b => b.RunSignalGeneration(1, false, It.IsAny<CancellationToken>()))
+        _bridge.Setup(b => b.RunSignalGeneration(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Fail("python crashed"));
 
         var summary = await CreateService().RunForAllUsersAsync();
@@ -74,15 +74,15 @@ public class SignalIntegrationServiceTests
         summary.UsersSucceeded.Should().Be(0);
         summary.AllSucceeded.Should().BeFalse();
         summary.Errors.Should().ContainSingle(e => e.Contains("user 1") && e.Contains("python crashed"));
-        // 3 attempts: 1 + 2 backoff retries.
-        _bridge.Verify(b => b.RunSignalGeneration(1, false, It.IsAny<CancellationToken>()), Times.Exactly(3));
+        // 2 attempts: 1 + 1 backoff retry.
+        _bridge.Verify(b => b.RunSignalGeneration(1, It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
     [Fact]
     public async Task RunForAll_FailsThenSucceeds_RetriesUntilSuccess()
     {
         _settingsRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(new[] { MakeSettings(1) });
-        _bridge.SetupSequence(b => b.RunSignalGeneration(1, false, It.IsAny<CancellationToken>()))
+        _bridge.SetupSequence(b => b.RunSignalGeneration(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Fail("transient"))
             .ReturnsAsync(Ok());
 
@@ -90,7 +90,7 @@ public class SignalIntegrationServiceTests
 
         summary.UsersSucceeded.Should().Be(1);
         summary.AllSucceeded.Should().BeTrue();
-        _bridge.Verify(b => b.RunSignalGeneration(1, false, It.IsAny<CancellationToken>()), Times.Exactly(2));
+        _bridge.Verify(b => b.RunSignalGeneration(1, It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
     [Fact]
@@ -100,11 +100,11 @@ public class SignalIntegrationServiceTests
         {
             MakeSettings(1), MakeSettings(2), MakeSettings(3)
         });
-        _bridge.Setup(b => b.RunSignalGeneration(1, false, It.IsAny<CancellationToken>()))
+        _bridge.Setup(b => b.RunSignalGeneration(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Ok());
-        _bridge.Setup(b => b.RunSignalGeneration(2, false, It.IsAny<CancellationToken>()))
+        _bridge.Setup(b => b.RunSignalGeneration(2, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Fail("nope"));
-        _bridge.Setup(b => b.RunSignalGeneration(3, false, It.IsAny<CancellationToken>()))
+        _bridge.Setup(b => b.RunSignalGeneration(3, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Ok());
 
         var summary = await CreateService().RunForAllUsersAsync();

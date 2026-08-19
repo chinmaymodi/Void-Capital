@@ -25,7 +25,7 @@ public class SignalFlowIntegrationTests : IDisposable
     public SignalFlowIntegrationTests(IntegrationFactory factory)
     {
         _factory = factory;
-        _client = factory.CreateClient();
+        _client = factory.CreateAuthedClient();
     }
 
     public void Dispose()

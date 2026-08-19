@@ -28,14 +28,18 @@ const pct = new Intl.NumberFormat('en-IN', { style: 'percent', maximumFractionDi
 // Risk metrics from a daily portfolio-value series (D17 overlay).
 // CAGR: annualized growth over the series span. Sharpe: mean/std of daily
 // returns annualized by sqrt(252). Max drawdown: worst peak-to-trough.
-function riskMetrics(snaps: PnlSnapshot[]) {
+// Trading-day convention: the daily cycle records one snapshot per trading
+// day, so values.length - 1 is the trading-day span. This matches the
+// sqrt(252) Sharpe annualization used across the system (metrics.py, F1-F7)
+// and avoids Infinity when the series spans a single calendar day.
+export function riskMetrics(snaps: PnlSnapshot[]) {
   if (snaps.length < 2) return null;
   const sorted = [...snaps].sort((a, b) => String(a.date).localeCompare(String(b.date)));
   const values = sorted.map((s) => s.portfolioValue);
   const start = values[0];
   const end = values[values.length - 1];
-  const days = Math.max(1, (new Date(sorted[sorted.length - 1].date).getTime() - new Date(sorted[0].date).getTime()) / 86_400_000);
-  const cagr = start > 0 ? Math.pow(end / start, 365 / days) - 1 : -1;
+  const tradingDays = Math.max(1, values.length - 1);
+  const cagr = start > 0 ? Math.pow(end / start, 252 / tradingDays) - 1 : -1;
   const returns: number[] = [];
   for (let i = 1; i < values.length; i++) {
     if (values[i - 1] > 0) returns.push(values[i] / values[i - 1] - 1);

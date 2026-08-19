@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using VoidCapital.Api.Modules.Portfolio;
 using VoidCapital.Api.Modules.Portfolio.DTOs;
@@ -8,6 +9,7 @@ namespace VoidCapital.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/[controller]")]
+[Authorize]
 public class PortfolioController : ControllerBase
 {
     private readonly IPortfolioService _portfolioService;
@@ -20,6 +22,7 @@ public class PortfolioController : ControllerBase
     [HttpGet("{userId:int}")]
     public async Task<ActionResult<ApiResponse<PortfolioStateDto>>> GetState(int userId)
     {
+        if (!User.CanAccess(userId)) return Forbid();
         var state = await _portfolioService.GetPortfolioStateAsync(userId);
         return Ok(ApiResponse<PortfolioStateDto>.Ok(state));
     }
@@ -27,6 +30,7 @@ public class PortfolioController : ControllerBase
     [HttpGet("{userId:int}/history")]
     public async Task<ActionResult<ApiResponse<IEnumerable<PnlSnapshot>>>> GetHistory(int userId)
     {
+        if (!User.CanAccess(userId)) return Forbid();
         var history = await _portfolioService.GetPnlHistoryAsync(userId);
         return Ok(ApiResponse<IEnumerable<PnlSnapshot>>.Ok(history));
     }

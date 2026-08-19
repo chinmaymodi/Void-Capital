@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Trades from '../pages/Trades';
 import { UserProvider } from '../context/UserProvider';
+import { UserContext } from '../context/UserContext';
 import { getTrades, getUsers } from '../services/api';
 import type { PagedTrades } from '../types';
 
@@ -47,6 +48,27 @@ function renderTrades() {
     <UserProvider>
       <Trades />
     </UserProvider>,
+  );
+}
+
+// Render as a specific user (bypasses UserProvider's default of user 1) so
+// the CSV export test can prove the URL uses currentUserId, not a literal 1.
+function renderTradesAs(userId: number) {
+  const users = [
+    { id: 1, name: 'Trader One' },
+    { id: 2, name: 'Trader Two' },
+  ];
+  return render(
+    <UserContext.Provider
+      value={{
+        users,
+        currentUserId: userId,
+        currentUser: users.find((u) => u.id === userId) ?? null,
+        setCurrentUserId: () => {},
+      }}
+    >
+      <Trades />
+    </UserContext.Provider>,
   );
 }
 
@@ -146,20 +168,21 @@ describe('Trades', () => {
     });
   });
 
-  it('opens CSV export URL with active filters', async () => {
+  it('opens CSV export URL with active filters for the current user', async () => {
     mockedGetTrades.mockResolvedValue(samplePage);
     const user = userEvent.setup();
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
 
-    renderTrades();
+    renderTradesAs(2);
     await screen.findByText('RELIANCE');
 
     await user.type(screen.getByTestId('filter-symbol'), 'TCS');
     await user.click(screen.getByTestId('apply-filters'));
     await user.click(screen.getByTestId('export-csv'));
 
+    // Uses currentUserId (2), not a hardcoded 1.
     expect(openSpy).toHaveBeenCalledWith(
-      expect.stringContaining('/api/v1/trades/1/export?symbol=TCS'),
+      expect.stringContaining('/api/v1/trades/2/export?symbol=TCS'),
       '_blank',
     );
     openSpy.mockRestore();

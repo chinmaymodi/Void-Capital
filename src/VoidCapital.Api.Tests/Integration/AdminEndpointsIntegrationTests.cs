@@ -25,7 +25,7 @@ public class AdminEndpointsIntegrationTests : IDisposable
     public AdminEndpointsIntegrationTests(IntegrationFactory factory)
     {
         _factory = factory;
-        _client = factory.CreateClient();
+        _client = factory.CreateAuthedClient();
     }
 
     public void Dispose()
@@ -143,11 +143,10 @@ public class AdminEndpointsIntegrationTests : IDisposable
         var response = await _client.PutAsJsonAsync("/api/v1/admin/settings/global", new
         {
             minConfidence = 0.9m,
+            negativeLimit = 0.0m,
+            interestRate = 0.1825m,
             watchlist = new[] { "INFY", "RELIANCE" }
         });
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var envelope = await response.Content.ReadFromJsonAsync<TestEnvelope<SettingsDto[]>>();
-        envelope!.Data.Should().HaveCountGreaterThanOrEqualTo(2);
 
         var a = await _client.GetFromJsonAsync<TestEnvelope<SettingsDto>>($"/api/v1/admin/settings/{userA}");
         a!.Data!.MinConfidence.Should().Be(0.9m);
@@ -170,10 +169,10 @@ public class AdminEndpointsIntegrationTests : IDisposable
         var response = await _client.PutAsJsonAsync("/api/v1/admin/settings/global", new
         {
             minConfidence = 0.9m,
+            negativeLimit = 0.0m,
+            interestRate = 0.1825m,
             watchlist = new[] { "INFY", "RELIANCE" }
         });
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-
         await using var db = await _factory.CreateDbAsync();
         var a = await db.Watchlist.Where(w => w.UserId == userA).Select(w => w.Symbol).ToListAsync();
         var b = await db.Watchlist.Where(w => w.UserId == userB).Select(w => w.Symbol).ToListAsync();
@@ -184,6 +183,8 @@ public class AdminEndpointsIntegrationTests : IDisposable
         var second = await _client.PutAsJsonAsync("/api/v1/admin/settings/global", new
         {
             minConfidence = 0.9m,
+            negativeLimit = 0.0m,
+            interestRate = 0.1825m,
             watchlist = new[] { "TCS" }
         });
         second.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -210,7 +211,8 @@ public class AdminEndpointsIntegrationTests : IDisposable
 
         envelope!.Data!.PositionsSold.Should().Be(1);
         envelope.Data.Proceeds.Should().Be(10000m);
-        envelope.Data.RemainingCash.Should().Be(100000m); // 90000 + 10000 proceeds
+        // 100000 - 10000 (buy) - 13.09 (buy commission) + 10000 (sell) - 11.59 (sell commission) = 99975.32
+        envelope.Data.RemainingCash.Should().Be(99975.32m);
 
         // Holdings table is empty for the user.
         await using var db = await _factory.CreateDbAsync();

@@ -48,6 +48,7 @@ public class AppDbContext : DbContext
             entity.Property(s => s.Id).HasColumnName("id");
             entity.Property(s => s.UserId).HasColumnName("user_id");
             entity.Property(s => s.AutoExecute).HasColumnName("auto_execute");
+            entity.Property(s => s.IsHalted).HasColumnName("is_halted");
             entity.Property(s => s.MinConfidence).HasColumnName("min_confidence");
             entity.Property(s => s.NegativeLimit).HasColumnName("negative_limit");
             entity.Property(s => s.InterestRate).HasColumnName("interest_rate");
@@ -83,6 +84,7 @@ public class AppDbContext : DbContext
             entity.Property(t => t.Quantity).HasColumnName("quantity");
             entity.Property(t => t.Price).HasColumnName("price");
             entity.Property(t => t.TotalValue).HasColumnName("total_value");
+            entity.Property(t => t.Commission).HasColumnName("commission");
             entity.Property(t => t.Reason).HasColumnName("reason");
             entity.Property(t => t.Timestamp).HasColumnName("timestamp");
         });
@@ -178,6 +180,9 @@ public class AppDbContext : DbContext
             entity.Property(p => p.EvaluationDays).HasColumnName("evaluation_days");
             entity.Property(p => p.CreatedAt).HasColumnName("created_at");
             entity.Property(p => p.ResolvedAt).HasColumnName("resolved_at");
+
+            // ADB1: enforce 1:1 at the EF level; schema is owned by FluentMigrator.
+            entity.HasIndex(p => p.SignalId).IsUnique();
         });
     }
 }

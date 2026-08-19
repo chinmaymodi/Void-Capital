@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Reflection;
 using VoidCapital.Api.Shared;
 using VoidCapital.Api.Tests.Integration;
 
@@ -67,7 +68,11 @@ public class HealthCheckTests
         Assert.NotNull(envelope);
         Assert.True(envelope!.Success);
         Assert.Equal("Void Capital API", envelope.Data!.Name);
-        Assert.Equal("0.1.0", envelope.Data.Version);
+        // S6: version comes from assembly metadata, not a hardcoded string.
+        var expectedVersion = typeof(VoidCapital.Api.Controllers.SystemController).Assembly
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion;
+        Assert.Equal(expectedVersion, envelope.Data.Version);
         Assert.False(string.IsNullOrWhiteSpace(envelope.Data.Environment));
     }
 

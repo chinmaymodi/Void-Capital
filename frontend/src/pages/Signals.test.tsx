@@ -164,6 +164,22 @@ describe('Signals', () => {
     expect(mockedBatchReject).not.toHaveBeenCalled();
   });
 
+  it('batch reject success marks cards REJECTED', async () => {
+    mockedGetTodaySignals.mockResolvedValue(sampleSignals);
+    mockedBatchReject.mockResolvedValue([{ id: 2, success: true, error: null }]);
+    const user = userEvent.setup();
+
+    renderSignals();
+    await screen.findByText('TCS');
+
+    await user.click(screen.getByTestId('select-2'));
+    await user.click(screen.getByTestId('batch-reject'));
+    await user.click(screen.getByTestId('batch-confirm-button'));
+
+    expect(await screen.findByText('Rejected')).toBeInTheDocument();
+    expect(mockedBatchReject).toHaveBeenCalledWith([2]);
+  });
+
   it('select all toggles every card', async () => {
     mockedGetTodaySignals.mockResolvedValue(sampleSignals);
     const user = userEvent.setup();

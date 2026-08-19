@@ -82,4 +82,25 @@ public class MarketDataRepository : IMarketDataRepository
             await conn.CloseAsync();
         }
     }
+
+    public async Task<DateTime?> GetLatestOptionsIntradayTimestampAsync()
+    {
+        // F15: same freshness probe for the options snapshot table. Owned by
+        // the Python pipeline (collect_live.py optionGreek endpoint); no EF
+        // entity maps it, so read the newest snapshot timestamp with raw SQL.
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT MAX(ts) FROM market_data.fo_options_intraday";
+            var result = await cmd.ExecuteScalarAsync();
+            return result is null or DBNull ? null : (DateTime)result;
+        }
+        finally
+        {
+            await conn.CloseAsync();
+        }
+    }
 }

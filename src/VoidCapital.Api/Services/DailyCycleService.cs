@@ -38,8 +38,18 @@ public class DailyCycleService : BackgroundService
     }
 
     /// <summary>True when the last run did not cover the given scheduled slot.</summary>
-    public static bool NeedsCatchUp(DateTime lastScheduledUtc, DateTime? lastFinishedAtUtc) =>
-        lastFinishedAtUtc is null || lastFinishedAtUtc.Value < lastScheduledUtc;
+    /// <remarks>
+    /// F14: a FAILED run is treated as unserved. The runner's finally block
+    /// always stamps FinishedAt - even on FAILED runs (Python pipeline
+    /// failure) - so a status-blind FinishedAt comparison would make the
+    /// failed slot look served and permanently suppress catch-up: the day's
+    /// trading silently drops with only a log line. FAILED forces a re-fire
+    /// on the next startup.
+    /// </remarks>
+    public static bool NeedsCatchUp(DateTime lastScheduledUtc, DateTime? lastFinishedAtUtc, string? lastStatus = null) =>
+        lastFinishedAtUtc is null ||
+        lastStatus == "FAILED" ||
+        lastFinishedAtUtc.Value < lastScheduledUtc;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -51,7 +61,20 @@ public class DailyCycleService : BackgroundService
             var target = LastScheduledSlotUtc(now).AddDays(1); // next slot is always ahead
 
             await Task.Delay(target - now, stoppingToken);
-            await RunCycleAsync(stoppingToken);
+            var status = await RunCycleAsync(stoppingToken);
+
+            // F14: one same-process re-fire for a failed slot. The catch-up
+            // heuristic treats FAILED as unserved, but that only helps on
+            // restart; this gives a transient Python failure one immediate
+            // retry after a short backoff so the day's trading is not
+            // silently dropped. SKIPPED (lock held by another instance) is
+            // not a failure and never re-fires.
+            if (status == "FAILED")
+            {
+                _logger.LogWarning("Daily cycle failed; retrying once in 30 minutes");
+                await Task.Delay(TimeSpan.FromMinutes(30), stoppingToken);
+                await RunCycleAsync(stoppingToken);
+            }
         }
     }
 
@@ -71,18 +94,15 @@ public class DailyCycleService : BackgroundService
             {
                 lastRun.Status = "FAILED";
                 lastRun.Error = $"Aborted on startup: run stuck in RUNNING since {lastRun.StartedAt:O}";
-                // Leave FinishedAt null: the stuck run never completed, so
-                // NeedsCatchUp must still see the slot as missed and fire
-                // catch-up. Any non-null FinishedAt (now, or backdated to
-                // StartedAt) can make the most recent slot look served when
-                // the stuck run was that slot's own scheduled run.
+                // Leave FinishedAt null: the stuck run never completed. F14
+                // also treats FAILED as unserved, so catch-up fires either way.
                 lastRun.FinishedAt = null;
                 await cycleRepo.UpdateAsync(lastRun);
                 _logger.LogWarning("Marked stale RUNNING cycle run {RunId} as FAILED", lastRun.Id);
             }
 
             var lastScheduled = LastScheduledSlotUtc(DateTime.UtcNow);
-            var missed = NeedsCatchUp(lastScheduled, lastRun?.FinishedAt);
+            var missed = NeedsCatchUp(lastScheduled, lastRun?.FinishedAt, lastRun?.Status);
 
             if (!missed)
             {
@@ -105,7 +125,7 @@ public class DailyCycleService : BackgroundService
         }
     }
 
-    private async Task RunCycleAsync(CancellationToken stoppingToken)
+    private async Task<string?> RunCycleAsync(CancellationToken stoppingToken)
     {
         try
         {
@@ -115,14 +135,19 @@ public class DailyCycleService : BackgroundService
             _logger.LogInformation(
                 "Daily cycle {Status}: users={Users}, signals={Generated}, executed={Executed}, error={Error}",
                 run.Status, run.UsersProcessed, run.SignalsGenerated, run.SignalsExecuted, run.Error);
+            return run.Status;
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             _logger.LogInformation("Daily cycle cancelled during shutdown");
+            return null;
         }
         catch (Exception ex)
         {
+            // A crash before the runner recorded a run row is a failure too:
+            // it never served the slot, so the caller may re-fire.
             _logger.LogError(ex, "Daily cycle crashed");
+            return "FAILED";
         }
     }
 }

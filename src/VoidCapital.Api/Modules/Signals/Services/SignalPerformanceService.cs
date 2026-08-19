@@ -51,7 +51,12 @@ public class SignalPerformanceService
                 }
                 catch (NotFoundException)
                 {
-                    continue;
+                    // D16: options signals (CE/PE) resolve against the contract settle
+                    // (fo_options), not the stock quote; an unobservable settle leaves
+                    // the row PENDING rather than resolving against the wrong price.
+                    // SPF1: don't skip - fall through to the EXPIRED branch so the
+                    // row resolves with ExitPrice = null instead of staying PENDING.
+                    currentPrice = null;
                 }
             }
             else
@@ -79,7 +84,9 @@ public class SignalPerformanceService
 
             if (perf.Outcome is not null and not "PENDING")
             {
-                perf.ActualReturn = (perf.ExitPrice!.Value - perf.EntryPrice) / perf.EntryPrice;
+                perf.ActualReturn = perf.ExitPrice.HasValue
+                    ? (perf.ExitPrice.Value - perf.EntryPrice) / perf.EntryPrice
+                    : null;
                 perf.ResolvedAt = DateTime.UtcNow;
                 await _performanceRepo.UpdateAsync(perf);
             }

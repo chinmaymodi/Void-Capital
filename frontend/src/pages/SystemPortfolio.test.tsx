@@ -47,6 +47,7 @@ const systemComparison: ComparisonPortfolio = {
   totalValue: 110000,
   totalReturn: 10000,
   totalReturnPercent: 0.1,
+  startingBudget: 100000,
 };
 
 const recklessComparison: ComparisonPortfolio = {
@@ -57,6 +58,7 @@ const recklessComparison: ComparisonPortfolio = {
   totalValue: 110000,
   totalReturn: 10000,
   totalReturnPercent: 0.1,
+  startingBudget: 100000,
 };
 
 const recklessSettings: Settings = {

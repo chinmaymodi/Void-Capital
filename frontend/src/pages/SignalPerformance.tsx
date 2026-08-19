@@ -16,7 +16,7 @@ import {
 } from 'recharts';
 import { EmptyState, ErrorState, Spinner } from '../components/ui';
 import { getModelPerformance, getResolvedSignals } from '../services/api';
-import type { ModelPerformance, PagedResolvedSignals, ResolvedSignal } from '../types';
+import type { ModelPerformance, ResolvedSignal } from '../types';
 
 const currency = new Intl.NumberFormat('en-IN', {
   style: 'currency',
@@ -33,48 +33,68 @@ const OUTCOME_LABEL: Record<string, string> = {
 };
 
 // Compute per-model cumulative return series from resolved signals.
+// Accumulate actualReturn per (model, date) instead of overwriting, so that
+// multiple signals resolving on the same date each contribute their return.
 function buildCumulativeSeries(resolved: ResolvedSignal[]) {
-  const byModel = new Map<string, { date: string; cumulative: number }[]>();
+  const byModel = new Map<string, Map<string, number>>();
   for (const r of resolved) {
     if (r.actualReturn == null) continue;
-    const points = byModel.get(r.modelName) ?? [];
-    points.push({ date: r.date, cumulative: r.actualReturn });
-    byModel.set(r.modelName, points);
+    const byDate = byModel.get(r.modelName) ?? new Map();
+    byDate.set(r.date, (byDate.get(r.date) ?? 0) + r.actualReturn);
+    byModel.set(r.modelName, byDate);
   }
 
-  // Flatten to { date, [modelName]: cumulative } rows for recharts.
   const rows: Record<string, string | number>[] = [];
-  const add = (model: string, points: { date: string; cumulative: number }[]) => {
+  const add = (model: string, byDate: Map<string, number>) => {
     let running = 0;
-    for (const p of points.sort((a, b) => a.date.localeCompare(b.date))) {
-      running += p.cumulative;
-      const row = rows.find((r) => r.date === p.date);
+    for (const [date, ret] of [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      running += ret;
+      const row = rows.find((r) => r.date === date);
       if (row) row[model] = running;
-      else rows.push({ date: p.date, [model]: running });
+      else rows.push({ date, [model]: running });
     }
   };
-  for (const [model, points] of byModel) add(model, points);
+  for (const [model, byDate] of byModel) add(model, byDate);
   return rows.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+}
+
+// Fetch all resolved signals (paginate until complete) so the cumulative
+// chart and table show the full history rather than only the first page.
+async function fetchAllResolved(
+  pageSize = 100,
+): Promise<ResolvedSignal[]> {
+  const all: ResolvedSignal[] = [];
+  let page = 1;
+  for (;;) {
+    const paged = await getResolvedSignals({ page, pageSize });
+    if (paged.items.length === 0) break;
+    all.push(...paged.items);
+    if (all.length >= paged.total) break;
+    page++;
+  }
+  return all;
 }
 
 const MODEL_COLORS = ['#4f8ef7', '#3dbf7d', '#e8a13a', '#b05ce6'];
 
 export function SignalPerformance() {
   const [models, setModels] = useState<ModelPerformance[]>([]);
-  const [resolved, setResolved] = useState<PagedResolvedSignals | null>(null);
+  const [resolved, setResolved] = useState<ResolvedSignal[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(() => {
+const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
-    Promise.all([getModelPerformance(), getResolvedSignals({ pageSize: 100 })])
-      .then(([m, r]) => {
-        setModels(m);
-        setResolved(r);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load performance'))
-      .finally(() => setLoading(false));
+    try {
+      const [m, r] = await Promise.all([getModelPerformance(), fetchAllResolved()]);
+      setModels(m);
+      setResolved(r);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load performance');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -88,7 +108,7 @@ export function SignalPerformance() {
     name: m.modelName,
     winRate: m.winRate,
   }));
-  const cumulativeData = buildCumulativeSeries(resolved?.items ?? []);
+  const cumulativeData = buildCumulativeSeries(resolved ?? []);
 
   return (
     <div className="performance-page">
@@ -168,7 +188,7 @@ export function SignalPerformance() {
 
           <section className="card">
             <h2>Recent Resolved Signals</h2>
-            {!resolved || resolved.items.length === 0 ? (
+            {!resolved || resolved.length === 0 ? (
               <EmptyState message="No resolved signals yet." />
             ) : (
               <div className="table-wrap">
@@ -186,7 +206,7 @@ export function SignalPerformance() {
                     </tr>
                   </thead>
                   <tbody>
-                    {resolved.items.map((r) => (
+                    {resolved.map((r) => (
                       <tr key={r.signalId}>
                         <td>{r.date}</td>
                         <td className="symbol-cell">{r.symbol}</td>

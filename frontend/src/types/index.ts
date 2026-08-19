@@ -51,6 +51,7 @@ export interface Trade {
   shares: number;
   price: number;
   total: number;
+  commission: number;
   reason: string | null;
   timestamp: string;
 }
@@ -58,16 +59,6 @@ export interface Trade {
 export interface TradeRequest {
   symbol: string;
   shares: number;
-}
-
-export interface StockPrice {
-  symbol: string;
-  date: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
 }
 
 export interface Settings {
@@ -166,6 +157,7 @@ export interface ComparisonPortfolio {
   totalValue: number;
   totalReturn: number;
   totalReturnPercent: number;
+  startingBudget: number;
 }
 
 export interface ComparisonGap {

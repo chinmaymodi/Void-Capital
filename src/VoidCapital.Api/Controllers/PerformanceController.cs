@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using VoidCapital.Api.Modules.Portfolio;
 using VoidCapital.Api.Modules.Portfolio.DTOs;
@@ -9,6 +10,9 @@ namespace VoidCapital.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/[controller]")]
+// Cross-user dashboard data (every agent's value/P&L, model aggregates,
+// compare) - admin only. A regular user has no per-user performance endpoint.
+[Authorize(Roles = "Admin")]
 public class PerformanceController : ControllerBase
 {
     private readonly ISignalRepository _signalRepo;
@@ -38,7 +42,7 @@ public class PerformanceController : ControllerBase
     /// response shape matches the trade log contract (items + total + page).
     /// </summary>
     [HttpGet("signals")]
-    public async Task<ActionResult<ApiResponse<object>>> GetSignals(
+    public async Task<ActionResult<ApiResponse<PagedResult<ResolvedSignalDto>>>> GetSignals(
         [FromQuery] int? userId = null,
         [FromQuery] string? model = null,
         [FromQuery] int page = 1,
@@ -49,14 +53,8 @@ public class PerformanceController : ControllerBase
         var query = new PerformanceQuery(userId, model, safePage, clampedPageSize);
         var (items, total) = await _signalRepo.GetResolvedAsync(query);
 
-        var result = new
-        {
-            items,
-            total,
-            page = safePage,
-            pageSize = clampedPageSize
-        };
-        return Ok(ApiResponse<object>.Ok(result));
+        var result = new PagedResult<ResolvedSignalDto>(items, total, safePage, clampedPageSize);
+        return Ok(ApiResponse<PagedResult<ResolvedSignalDto>>.Ok(result));
     }
 
     /// <summary>
@@ -81,7 +79,8 @@ public class PerformanceController : ControllerBase
                 state.HoldingsValue,
                 state.TotalValue,
                 totalReturn,
-                user.StartingBudget > 0 ? totalReturn / user.StartingBudget : 0m));
+                user.StartingBudget > 0 ? totalReturn / user.StartingBudget : 0m,
+                user.StartingBudget));
         }
 
         var gaps = new List<ComparisonGapDto>();

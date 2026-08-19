@@ -5,6 +5,12 @@
     <ProjectReference Include="..\VoidCapital.Infrastructure\VoidCapital.Infrastructure.csproj" />
   </ItemGroup>
 
+  <!-- API keys (gitignored, generated once). Copied to output so both dev
+       (dotnet run) and the published Windows service find it next to the DLL. -->
+  <ItemGroup>
+    <Content Update="auth.keys.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="9.0.0" />
     <PackageReference Include="AspNetCore.HealthChecks.Redis" Version="9.0.0" />

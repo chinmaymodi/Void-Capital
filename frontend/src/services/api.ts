@@ -18,7 +18,6 @@ import type {
   SignalBatchResult,
   SignalJob,
   SquareOffResult,
-  StockPrice,
   Trade,
   TradeFilters,
   TradeRequest,
@@ -30,8 +29,16 @@ const api = axios.create({
   timeout: 15000,
 });
 
-// Request logging in dev (console.debug per the D4 spec).
+// Request logging in dev (console.debug per the D4 spec), plus the API key
+// header (A1-class auth). The dashboard authenticates as admin via
+// VITE_API_KEY (frontend/.env, gitignored); without it every request 401s.
 api.interceptors.request.use((config) => {
+  const apiKey = import.meta.env.VITE_API_KEY as string | undefined;
+  if (apiKey) {
+    config.headers['X-Api-Key'] = apiKey;
+  } else if (import.meta.env.DEV) {
+    console.warn('[api] VITE_API_KEY is not set; requests will be rejected (401)');
+  }
   if (import.meta.env.DEV) {
     console.debug(`[api] ${config.method?.toUpperCase()} ${config.url}`, config.params ?? '');
   }
@@ -39,7 +46,8 @@ api.interceptors.request.use((config) => {
 });
 
 // Response interceptor: unwrap the ApiResponse envelope on 2xx, and normalize
-// errors so callers receive { message, status } instead of raw axios errors.
+// errors so callers receive a real Error (so `err instanceof Error` works in
+// every page handler) carrying the backend message and an attached status.
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -48,7 +56,9 @@ api.interceptors.response.use(
     // prefer .error, fall back to a generic message for network failures.
     const message: string =
       error.response?.data?.error ?? error.message ?? 'Request failed';
-    return Promise.reject({ message, status });
+    const normalized = new Error(message) as Error & { status: number };
+    normalized.status = status;
+    return Promise.reject(normalized);
   },
 );
 
@@ -93,14 +103,6 @@ export function sellStock(
   userId: number = USER_ID,
 ): Promise<Trade> {
   return unwrap(api.post<ApiResponse<Trade>>(`/holdings/${userId}/sell`, request));
-}
-
-export function getStockPrice(symbol: string): Promise<number> {
-  return unwrap(api.get<ApiResponse<number>>(`/market/${symbol}/price`));
-}
-
-export function getStockHistory(symbol: string): Promise<StockPrice[]> {
-  return unwrap(api.get<ApiResponse<StockPrice[]>>(`/market/${symbol}/history`));
 }
 
 export function getTrades(filters: TradeFilters = {}, userId: number = USER_ID): Promise<PagedTrades> {
@@ -226,16 +228,25 @@ export function getSignalJobStatus(jobId: number): Promise<SignalJob> {
  * Signal generation runs as a background job (the Python pipeline takes
  * minutes, beyond the 15s axios timeout), so the POST returns a job id
  * immediately and this helper polls the status endpoint every 2.5s.
+ * Polling is capped at 15 minutes: a job that never leaves RUNNING (hung
+ * pipeline, service restart) throws instead of polling forever.
  */
+const POLL_INTERVAL_MS = 2500;
+const MAX_WAIT_MS = 15 * 60 * 1000;
+
 export async function runSignalGenerationAndWait(
   onStatus?: (job: SignalJob) => void,
 ): Promise<SignalJob> {
   const job = await runSignalGeneration();
+  const deadline = Date.now() + MAX_WAIT_MS;
   for (;;) {
     const current = await getSignalJobStatus(job.jobId);
     onStatus?.(current);
     if (current.status !== 'RUNNING') return current;
-    await new Promise((resolve) => setTimeout(resolve, 2500));
+    if (Date.now() >= deadline) {
+      throw new Error('Signal generation timed out after 15 minutes');
+    }
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
 }
 

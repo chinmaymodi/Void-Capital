@@ -3,6 +3,7 @@ using VoidCapital.Api.Modules.Signals.DTOs;
 using VoidCapital.Api.Modules.Signals.Models;
 using VoidCapital.Api.Shared;
 using VoidCapital.Api.Shared.Repositories;
+using VoidCapital.Api.Modules.MarketData;
 
 namespace VoidCapital.Api.Modules.Signals.Services;
 
@@ -17,15 +18,18 @@ public class SignalService : ISignalService
     private readonly ISignalRepository _signalRepo;
     private readonly ISettingsRepository _settingsRepo;
     private readonly IPortfolioService _portfolioService;
+    private readonly IMarketDataService _marketData;
 
     public SignalService(
         ISignalRepository signalRepo,
         ISettingsRepository settingsRepo,
-        IPortfolioService portfolioService)
+        IPortfolioService portfolioService,
+        IMarketDataService marketData)
     {
         _signalRepo = signalRepo;
         _settingsRepo = settingsRepo;
         _portfolioService = portfolioService;
+        _marketData = marketData;
     }
 
     public async Task<IEnumerable<SignalDto>> GetTodaySignalsAsync(int userId)
@@ -46,9 +50,20 @@ public class SignalService : ISignalService
         else
         {
             signal.Status = SignalStatus.APPROVED;
+            await _signalRepo.UpdateAsync(signal);
         }
 
-        await _signalRepo.UpdateAsync(signal);
+        return SignalDto.From(signal);
+    }
+
+    public async Task<SignalDto> ExecuteApprovedSignalAsync(int signalId)
+    {
+        var signal = await _signalRepo.GetByIdAsync(signalId)
+            ?? throw new NotFoundException($"Signal {signalId} was not found.");
+        if (signal.Status != SignalStatus.APPROVED)
+            throw new ValidationException($"Signal {signalId} is not in APPROVED state.");
+
+        await TryExecuteAsync(signal);
         return SignalDto.From(signal);
     }
 
@@ -112,6 +127,19 @@ public class SignalService : ISignalService
     {
         try
         {
+            // Standardize fill price source: always use market data service
+            var price = await _marketData.GetCurrentPriceAsync(signal.Symbol);
+            if (price <= 0)
+                throw new ValidationException($"Price not found for {signal.Symbol}.");
+
+            // F11: Price sanity check
+            if (signal.Performance?.EntryPrice > 0)
+            {
+                var deviation = Math.Abs(price - signal.Performance.EntryPrice) / signal.Performance.EntryPrice;
+                if (deviation > 0.10m)
+                    throw new ValidationException($"Price deviation of {deviation:P} exceeds sanity band.");
+            }
+
             if (signal.Action == "BUY" || signal.Action == "SELL")
             {
                 if (signal.SuggestedQuantity is null or <= 0)
@@ -151,14 +179,18 @@ public class SignalService : ISignalService
                 {
                     await _portfolioService.ExecuteSellAsync(signal.UserId, signal.Symbol, signal.SuggestedQuantity.Value);
                 }
+                signal.Status = SignalStatus.EXECUTED;
             }
-
-            signal.Status = SignalStatus.EXECUTED;
+            else
+            {
+                throw new ValidationException($"Unknown signal action: {signal.Action}");
+            }
         }
         catch (Exception ex)
         {
             signal.Status = SignalStatus.FAILED;
             signal.FailureReason = ex.Message;
         }
+        await _signalRepo.UpdateAsync(signal);
     }
 }

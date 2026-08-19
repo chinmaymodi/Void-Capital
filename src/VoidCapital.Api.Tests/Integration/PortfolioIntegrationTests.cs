@@ -22,7 +22,7 @@ public class PortfolioIntegrationTests : IDisposable
     public PortfolioIntegrationTests(IntegrationFactory factory)
     {
         _factory = factory;
-        _client = factory.CreateClient();
+        _client = factory.CreateAuthedClient();
     }
 
     public void Dispose()
@@ -103,7 +103,8 @@ public class PortfolioIntegrationTests : IDisposable
 
         await using var db = await _factory.CreateDbAsync();
         var user = await db.Users.FindAsync(userId);
-        user!.CurrentCash.Should().Be(90000m); // 100000 - 10*1000
+        // 100000 - 10000 (buy) - 13.09 (commission) = 89986.91
+        user!.CurrentCash.Should().Be(89986.91m);
 
         var holding = await db.Holdings.FirstOrDefaultAsync(h => h.UserId == userId);
         holding.Should().NotBeNull();
@@ -113,6 +114,7 @@ public class PortfolioIntegrationTests : IDisposable
         var trade = await db.Trades.FirstOrDefaultAsync(t => t.UserId == userId);
         trade.Should().NotBeNull();
         trade!.TotalValue.Should().Be(10000m);
+        trade.Commission.Should().Be(13.09m);
     }
 
     [Fact]
@@ -129,8 +131,8 @@ public class PortfolioIntegrationTests : IDisposable
 
         await using var db = await _factory.CreateDbAsync();
         var user = await db.Users.FindAsync(userId);
-        // 100000 - 10000 (buy) + 4000 (sell proceeds) = 94000
-        user!.CurrentCash.Should().Be(94000m);
+        // 100000 - 10000 (buy) - 13.09 (buy commission) + 4000 (sell) - 4.64 (sell commission) = 93982.27
+        user!.CurrentCash.Should().Be(93982.27m);
 
         var holding = await db.Holdings.FirstOrDefaultAsync(h => h.UserId == userId);
         holding!.Quantity.Should().Be(6);
@@ -176,9 +178,9 @@ public class PortfolioIntegrationTests : IDisposable
         var response = await _client.GetFromJsonAsync<TestEnvelope<PortfolioStateDto>>(
             $"/api/v1/portfolio/{userId}");
 
-        response!.Data!.Cash.Should().Be(99000m);
+        response!.Data!.Cash.Should().Be(98998.69m); // 100000 - 1000 - 1.31 commission
         response.Data.HoldingsValue.Should().Be(1000m); // 10 * 100
-        response.Data.TotalValue.Should().Be(100000m);
+        response.Data.TotalValue.Should().Be(99998.69m);
     }
 
     private record PortfolioStateDto(decimal Cash, decimal HoldingsValue, decimal TotalValue);

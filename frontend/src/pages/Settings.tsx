@@ -47,6 +47,10 @@ export function SettingsPage() {
 
   const save = async () => {
     if (!settings) return;
+    if (!Number.isFinite(settings.minConfidence) || settings.minConfidence < 0 || settings.minConfidence > 1) {
+      showError('Min confidence must be between 0 and 1');
+      return;
+    }
     setSaving(true);
     try {
       const updated = await updateSettings(settings, currentUserId);

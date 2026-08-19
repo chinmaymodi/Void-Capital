@@ -30,11 +30,16 @@ public class UserRepository : IUserRepository
     public async Task<int> UpdateCashAsync(int userId, decimal newCash)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
-        var user = await db.Users.FindAsync(userId);
-        if (user is null)
-            return 0;
+        return await db.Users
+            .Where(u => u.Id == userId)
+            .ExecuteUpdateAsync(s => s.SetProperty(u => u.CurrentCash, newCash));
+    }
 
-        user.CurrentCash = newCash;
-        return await db.SaveChangesAsync();
+    public async Task<int> UpdateCashAtomicAsync(int userId, decimal delta)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        return await db.Users
+            .Where(u => u.Id == userId)
+            .ExecuteUpdateAsync(s => s.SetProperty(u => u.CurrentCash, u => u.CurrentCash + delta));
     }
 }

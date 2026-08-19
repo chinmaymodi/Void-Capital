@@ -168,7 +168,9 @@ function TradeModal({ symbol, type, currentHoldings, onClose, onSubmit }: TradeM
   const [localError, setLocalError] = useState<string | null>(null);
 
   const isBuy = type === 'BUY';
-  const parsed = Number.parseInt(shares, 10);
+  // Number() (not parseInt) so fractional input like "2.5" is rejected
+  // instead of silently truncating to 2 shares.
+  const parsed = Number(shares);
 
   const submit = async () => {
     if (!Number.isInteger(parsed) || parsed <= 0) {

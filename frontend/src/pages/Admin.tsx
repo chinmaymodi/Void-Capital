@@ -116,13 +116,19 @@ export function Admin() {
   };
 
   const saveGlobal = async () => {
+    const mc = Number(minConfidence);
+    if (!Number.isFinite(mc) || mc < 0 || mc > 1) {
+      showError('Min confidence must be between 0 and 1');
+      setSavingGlobal(false);
+      return;
+    }
     setSavingGlobal(true);
     try {
       const symbols = watchlist
         .split(',')
         .map((s) => s.trim().toUpperCase())
         .filter(Boolean);
-      const updated = await updateGlobalSettings(Number(minConfidence), symbols);
+      const updated = await updateGlobalSettings(mc, symbols);
       setConfigs(
         updated.reduce<Record<number, Settings>>((acc, s) => {
           acc[s.userId] = s;

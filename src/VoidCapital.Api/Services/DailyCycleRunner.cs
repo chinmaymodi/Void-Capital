@@ -41,6 +41,7 @@ public class DailyCycleRunner : IDailyCycleRunner
     private readonly IHoldingRepository _holdingRepo;
     private readonly ICycleRunRepository _cycleRunRepo;
     private readonly IProcessRunner _processRunner;
+    private readonly ICycleLock _cycleLock;
     private readonly PythonSettings _pythonSettings;
     private readonly ILogger<DailyCycleRunner> _logger;
 
@@ -56,6 +57,7 @@ public class DailyCycleRunner : IDailyCycleRunner
         IHoldingRepository holdingRepo,
         ICycleRunRepository cycleRunRepo,
         IProcessRunner processRunner,
+        ICycleLock cycleLock,
         IOptions<PythonSettings> pythonOptions,
         ILogger<DailyCycleRunner> logger)
     {
@@ -70,12 +72,24 @@ public class DailyCycleRunner : IDailyCycleRunner
         _holdingRepo = holdingRepo;
         _cycleRunRepo = cycleRunRepo;
         _processRunner = processRunner;
+        _cycleLock = cycleLock;
         _pythonSettings = pythonOptions.Value;
         _logger = logger;
     }
 
     public async Task<DailyCycleRunResult> RunAsync(CancellationToken ct = default)
     {
+        // DS1: exactly one instance may run the cycle at a time. A held lock
+        // means another host (or a manual trigger) is already running it -
+        // skip without recording a run so catch-up still fires if needed.
+        await using var lease = await _cycleLock.TryAcquireAsync(ct);
+        if (lease is null)
+        {
+            _logger.LogWarning("Daily cycle skipped: another instance holds the advisory lock");
+            return new DailyCycleRunResult(
+                "SKIPPED", 0, 0, 0, "Another instance is running the daily cycle");
+        }
+
         var startedAt = DateTime.UtcNow;
         var run = new CycleRun { StartedAt = startedAt, Status = "RUNNING" };
         run = await _cycleRunRepo.AddAsync(run);
@@ -116,22 +130,34 @@ public class DailyCycleRunner : IDailyCycleRunner
             var istToday = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5.5));
             run.SignalsGenerated = (await _signalRepo.GetAllSignalsOnDateAsync(istToday))?.Count() ?? 0;
 
-            // 2. Auto-execute signals for auto-execute users, min-confidence gated
+            // 2. Auto-execute signals for auto-execute users, min-confidence gated.
+            // F12: halted agents are terminal - they never auto-execute again.
             var executed = 0;
             var settings = (await _settingsRepo.GetAllAsync()).ToList();
-            foreach (var userSettings in settings.Where(s => s.AutoExecute))
+            foreach (var userSettings in settings.Where(s => s.AutoExecute && !s.IsHalted))
             {
                 ct.ThrowIfCancellationRequested();
-                var today = await _signalRepo.GetTodaySignalsAsync(userSettings.UserId);
-                var eligible = today
-                    .Where(s => s.Status == SignalStatus.PENDING && s.Confidence >= userSettings.MinConfidence)
-                    .Select(s => s.Id)
-                    .ToArray();
+                try
+                {
+                    var today = await _signalRepo.GetTodaySignalsAsync(userSettings.UserId);
+                    var eligible = today
+                        .Where(s => s.Status == SignalStatus.PENDING && s.Confidence >= userSettings.MinConfidence)
+                        .Select(s => s.Id)
+                        .ToArray();
 
-                if (eligible.Length == 0) continue;
+                    if (eligible.Length == 0) continue;
 
-                var results = await _signalService.BatchApproveAsync(eligible);
-                executed += results.Count(r => r.Success);
+                    var results = await _signalService.BatchApproveAsync(eligible);
+                    executed += results.Count(r => r.Success);
+                }
+                catch (Exception ex)
+                {
+                    // D1: one user's execution failure must not abort the cycle
+                    // for the remaining users.
+                    _logger.LogError(ex,
+                        "Auto-execute failed for user {UserId}, continuing",
+                        userSettings.UserId);
+                }
             }
             run.SignalsExecuted = executed;
 
@@ -143,42 +169,106 @@ public class DailyCycleRunner : IDailyCycleRunner
             foreach (var user in users)
             {
                 ct.ThrowIfCancellationRequested();
-                var userSettings = await _settingsRepo.GetByUserIdAsync(user.Id);
-
-                if (user.CurrentCash < 0)
+                try
                 {
-                    var interest = user.CurrentCash * (userSettings?.InterestRate ?? 0m) / 365;
-                    await _userRepo.UpdateCashAsync(user.Id, user.CurrentCash + interest);
-                }
+                    var userSettings = await _settingsRepo.GetByUserIdAsync(user.Id);
 
-                if (userSettings?.NegativeLimit != null && user.CurrentCash < -userSettings.NegativeLimit)
-                {
-                    _logger.LogWarning(
-                        "Margin call for user {UserId}: cash {Cash} < limit {Limit}",
-                        user.Id, user.CurrentCash, -userSettings.NegativeLimit);
-                    var holdings = await _holdingRepo.GetByUserIdAsync(user.Id);
-                    foreach (var holding in holdings)
+                    // F12: a halted agent is terminal - no interest accrual,
+                    // no further margin calls. Only an admin revive (settings
+                    // PUT with explicit IsHalted=false) brings it back.
+                    if (userSettings?.IsHalted == true)
                     {
-                        // D16: options holdings (users 4-7) square off via the
-                        // contract-keyed options path; equities via the legacy one.
-                        if (holding.InstrumentType == "EQ")
+                        _logger.LogInformation(
+                            "User {UserId} is halted: skipping interest and margin call",
+                            user.Id);
+                        continue;
+                    }
+
+                    if (user.CurrentCash < 0)
+                    {
+                        var interest = user.CurrentCash * (userSettings?.InterestRate ?? 0m) / 365;
+                        await _userRepo.UpdateCashAsync(user.Id, user.CurrentCash + interest);
+                    }
+
+                    // D2: re-read the balance after the interest write so a
+                    // breach caused by the interest charge is caught today,
+                    // not detected one day late.
+                    var cash = (await _userRepo.GetByIdAsync(user.Id))?.CurrentCash ?? user.CurrentCash;
+
+                    if (userSettings?.NegativeLimit != null && cash < -userSettings.NegativeLimit)
+                    {
+                        _logger.LogWarning(
+                            "Margin call for user {UserId}: cash {Cash} < limit {Limit}",
+                            user.Id, cash, -userSettings.NegativeLimit);
+                        var holdings = await _holdingRepo.GetByUserIdAsync(user.Id);
+                        foreach (var holding in holdings)
                         {
-                            await _portfolioService.ExecuteSellAsync(user.Id, holding.Symbol, holding.Quantity);
+                            try
+                            {
+                                // D16: options holdings (users 4-7) square off via the
+                                // contract-keyed options path; equities via the legacy one.
+                                if (holding.InstrumentType == "EQ")
+                                {
+                                    await _portfolioService.ExecuteSellAsync(user.Id, holding.Symbol, holding.Quantity);
+                                }
+                                else if (holding.Expiry is not null && holding.Strike is not null)
+                                {
+                                    await _portfolioService.ExecuteOptionsSellAsync(
+                                        user.Id, holding.Symbol, holding.InstrumentType,
+                                        holding.Expiry.Value, holding.Strike.Value, holding.Quantity);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                // D1: one un-sellable holding (bad quote, missing
+                                // contract) must not strand the rest of the user's
+                                // liquidation or the other users' margin calls.
+                                _logger.LogError(ex,
+                                    "Margin-call sell failed for user {UserId} holding {Symbol}, continuing",
+                                    user.Id, holding.Symbol);
+                            }
                         }
-                        else if (holding.Expiry is not null && holding.Strike is not null)
+
+                        // F12: terminal rule. If the liquidation did not recover
+                        // the deficit (cash still below the negative limit), the
+                        // agent is dead: halt it so it stops trading and stops
+                        // accruing interest on a permanent deficit. Admin revive
+                        // only - there is no automatic recovery.
+                        var postLiquidation = (await _userRepo.GetByIdAsync(user.Id))?.CurrentCash ?? cash;
+                        if (postLiquidation < -userSettings.NegativeLimit)
                         {
-                            await _portfolioService.ExecuteOptionsSellAsync(
-                                user.Id, holding.Symbol, holding.InstrumentType,
-                                holding.Expiry.Value, holding.Strike.Value, holding.Quantity);
+                            _logger.LogError(
+                                "User {UserId} failed liquidation: cash {Cash} still below limit {Limit}; halting agent",
+                                user.Id, postLiquidation, -userSettings.NegativeLimit);
+                            userSettings.IsHalted = true;
+                            await _settingsRepo.UpdateAsync(userSettings);
                         }
                     }
+                }
+                catch (Exception ex)
+                {
+                    // D1: per-user isolation for the interest/margin-call step.
+                    _logger.LogError(ex,
+                        "Interest/margin-call step failed for user {UserId}, continuing",
+                        user.Id);
                 }
             }
 
             // 6. PnL snapshots
             foreach (var user in users)
             {
-                await _portfolioService.RecordDailySnapshotAsync(user.Id);
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    await _portfolioService.RecordDailySnapshotAsync(user.Id);
+                }
+                catch (Exception ex)
+                {
+                    // D1: a snapshot failure for one user must not skip the rest.
+                    _logger.LogError(ex,
+                        "PnL snapshot failed for user {UserId}, continuing",
+                        user.Id);
+                }
             }
 
             // A Python failure is not an exception: RunForAllUsersAsync returns

@@ -8,7 +8,8 @@ public record ComparisonPortfolioDto(
     decimal HoldingsValue,
     decimal TotalValue,
     decimal TotalReturn,
-    decimal TotalReturnPercent);
+    decimal TotalReturnPercent,
+    decimal StartingBudget);
 
 /// <summary>Gap between a pair of portfolios, measured in rupees and percent.</summary>
 public record ComparisonGapDto(

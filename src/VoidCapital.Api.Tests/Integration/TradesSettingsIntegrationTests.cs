@@ -21,7 +21,7 @@ public class TradesSettingsIntegrationTests : IDisposable
     public TradesSettingsIntegrationTests(IntegrationFactory factory)
     {
         _factory = factory;
-        _client = factory.CreateClient();
+        _client = factory.CreateAuthedClient();
     }
 
     public void Dispose()
@@ -153,7 +153,7 @@ public class TradesSettingsIntegrationTests : IDisposable
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/csv");
 
         var csv = await response.Content.ReadAsStringAsync();
-        csv.Should().StartWith("id,symbol,type,quantity,price,total_value,reason,timestamp");
+        csv.Should().StartWith("id,symbol,type,quantity,price,total_value,commission,reason,timestamp");
         var lines = csv.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         lines.Should().HaveCount(4); // header + 3 trades
         csv.Should().Contain("RELIANCE,BUY,10");

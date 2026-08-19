@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Moq;
+using VoidCapital.Api.Modules.MarketData;
 using VoidCapital.Api.Modules.Portfolio;
 using VoidCapital.Api.Modules.Signals;
 using VoidCapital.Api.Modules.Signals.Models;
@@ -16,11 +17,13 @@ public class SignalServiceTests
     private readonly Mock<ISignalRepository> _signalRepo = new();
     private readonly Mock<ISettingsRepository> _settingsRepo = new();
     private readonly Mock<IPortfolioService> _portfolioService = new();
+    private readonly Mock<IMarketDataService> _marketData = new();
 
     private SignalService CreateService() => new(
         _signalRepo.Object,
         _settingsRepo.Object,
-        _portfolioService.Object);
+        _portfolioService.Object,
+        _marketData.Object);
 
     private static Signal MakePendingSignal(string action = "BUY", int? quantity = 10, int userId = 1) => new()
     {
@@ -37,6 +40,10 @@ public class SignalServiceTests
         _settingsRepo
             .Setup(r => r.GetByUserIdAsync(userId))
             .ReturnsAsync(new UserSettings { UserId = userId, AutoExecute = autoExecute });
+
+    private void GivenPrice(decimal price = 500m) =>
+        _marketData.Setup(m => m.GetCurrentPriceAsync(It.IsAny<string>()))
+            .ReturnsAsync(price);
 
     private void GivenSignal(Signal signal) =>
         _signalRepo.Setup(r => r.GetByIdAsync(signal.Id)).ReturnsAsync(signal);
@@ -91,6 +98,7 @@ public class SignalServiceTests
         var signal = MakePendingSignal(action: "BUY", quantity: 10);
         GivenSignal(signal);
         GivenSettings(autoExecute: true);
+        GivenPrice();
 
         await CreateService().ApproveSignalAsync(signal.Id);
 
@@ -105,6 +113,7 @@ public class SignalServiceTests
         var signal = MakePendingSignal(action: "SELL", quantity: 5);
         GivenSignal(signal);
         GivenSettings(autoExecute: true);
+        GivenPrice();
 
         await CreateService().ApproveSignalAsync(signal.Id);
 
@@ -118,6 +127,7 @@ public class SignalServiceTests
         var signal = MakePendingSignal(action: "BUY", quantity: 10);
         GivenSignal(signal);
         GivenSettings(autoExecute: true);
+        GivenPrice();
         _portfolioService
             .Setup(p => p.ExecuteBuyAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<int>()))
             .ThrowsAsync(new InsufficientFundsException("Insufficient funds for purchase"));
@@ -134,6 +144,7 @@ public class SignalServiceTests
         var signal = MakePendingSignal(action: "BUY", quantity: null);
         GivenSignal(signal);
         GivenSettings(autoExecute: true);
+        GivenPrice();
 
         await CreateService().ApproveSignalAsync(signal.Id);
 
@@ -211,5 +222,34 @@ public class SignalServiceTests
         signals.Should().ContainSingle();
         signals.First().Symbol.Should().Be("RELIANCE");
         signals.First().Status.Should().Be("PENDING");
+    }
+
+    // ---------- ExecuteApproved ----------
+
+    [Fact]
+    public async Task ExecuteApprovedSignal_WhenApproved_CallsExecuteBuyAndMarksExecuted()
+    {
+        var signal = MakePendingSignal(action: "BUY", quantity: 10);
+        signal.Status = SignalStatus.APPROVED;
+        GivenSignal(signal);
+        GivenPrice();
+
+        await CreateService().ExecuteApprovedSignalAsync(signal.Id);
+
+        _portfolioService.Verify(p => p.ExecuteBuyAsync(signal.UserId, "RELIANCE", 10), Times.Once);
+        signal.Status.Should().Be(SignalStatus.EXECUTED);
+    }
+
+    [Fact]
+    public async Task ExecuteApprovedSignal_WhenNotApproved_Throws()
+    {
+        var signal = MakePendingSignal();
+        GivenSignal(signal);
+        GivenPrice();
+
+        var service = CreateService();
+        var act = () => service.ExecuteApprovedSignalAsync(signal.Id);
+
+        await act.Should().ThrowAsync<ValidationException>();
     }
 }

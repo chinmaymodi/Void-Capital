@@ -25,10 +25,10 @@ public class MarketDataService : IMarketDataService
         _logger = logger;
     }
 
-    public async Task<decimal> GetCurrentPriceAsync(string symbol)
+    public async Task<decimal> GetCurrentPriceAsync(string symbol, CancellationToken ct = default)
     {
         var cacheKey = $"stock:{symbol}:price";
-        var cached = await _cache.GetStringAsync(cacheKey);
+        var cached = await _cache.GetStringAsync(cacheKey, ct);
         if (cached != null && decimal.TryParse(cached, out var cachedPrice))
         {
             _logger.LogDebug("Cache hit for {Key}", cacheKey);
@@ -39,13 +39,13 @@ public class MarketDataService : IMarketDataService
             ?? throw new NotFoundException($"No market data for symbol '{symbol}'");
 
         await _cache.SetStringAsync(cacheKey, price.ToString(),
-            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = CacheTtl });
+            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = CacheTtl }, ct);
 
         _logger.LogDebug("Cache miss for {Key}; fetched from DB", cacheKey);
         return price;
     }
 
-    public async Task<decimal> GetCurrentPriceFreshAsync(string symbol)
+    public async Task<decimal> GetCurrentPriceFreshAsync(string symbol, CancellationToken ct = default)
     {
         // D3: no cache read, no cache write -- the caller (signal resolution)
         // needs the DB's latest quote, not a quote that may predate the
@@ -54,10 +54,10 @@ public class MarketDataService : IMarketDataService
             ?? throw new NotFoundException($"No market data for symbol '{symbol}'");
     }
 
-    public Task<IEnumerable<StockPrice>> GetPriceHistoryAsync(string symbol, DateOnly from, DateOnly to) =>
+    public Task<IEnumerable<StockPrice>> GetPriceHistoryAsync(string symbol, DateOnly from, DateOnly to, CancellationToken ct = default) =>
         _repo.GetPriceHistoryAsync(symbol, from, to);
 
-    public async Task<decimal> GetOptionPriceAsync(string symbol, DateOnly expiry, decimal strike, string optType)
+    public async Task<decimal> GetOptionPriceAsync(string symbol, DateOnly expiry, decimal strike, string optType, CancellationToken ct = default)
     {
         // D16: options fills price at the reconstructed settle (fo_options),
         // not the stock quote. Read fresh -- bhavcopy settles land once per

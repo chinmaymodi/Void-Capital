@@ -13,7 +13,7 @@ namespace VoidCapital.Api.Tests.Controllers;
 public class SettingsControllerTests
 {
     private readonly Mock<ISettingsRepository> _settingsRepo = new();
-    private SettingsController CreateController() => new(_settingsRepo.Object);
+    private SettingsController CreateController() => new SettingsController(_settingsRepo.Object).AsAdmin();
 
     private static UserSettings MakeSettings() => new()
     {

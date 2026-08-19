@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using VoidCapital.Api.Modules.Portfolio;
 using VoidCapital.Api.Modules.Portfolio.DTOs;
@@ -8,6 +9,7 @@ namespace VoidCapital.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/[controller]")]
+[Authorize]
 public class HoldingsController : ControllerBase
 {
     private readonly IPortfolioService _portfolioService;
@@ -20,6 +22,7 @@ public class HoldingsController : ControllerBase
     [HttpGet("{userId:int}")]
     public async Task<ActionResult<ApiResponse<IEnumerable<HoldingDto>>>> GetHoldings(int userId)
     {
+        if (!User.CanAccess(userId)) return Forbid();
         var holdings = await _portfolioService.GetHoldingsAsync(userId);
         return Ok(ApiResponse<IEnumerable<HoldingDto>>.Ok(holdings));
     }
@@ -27,6 +30,7 @@ public class HoldingsController : ControllerBase
     [HttpPost("{userId:int}/buy")]
     public async Task<ActionResult<ApiResponse<TradeDto>>> Buy(int userId, [FromBody] TradeRequest request)
     {
+        if (!User.CanAccess(userId)) return Forbid();
         var trade = await _portfolioService.ExecuteBuyAsync(userId, request.Symbol, request.Shares);
         return Ok(ApiResponse<TradeDto>.Ok(ToDto(trade)));
     }
@@ -34,11 +38,12 @@ public class HoldingsController : ControllerBase
     [HttpPost("{userId:int}/sell")]
     public async Task<ActionResult<ApiResponse<TradeDto>>> Sell(int userId, [FromBody] TradeRequest request)
     {
+        if (!User.CanAccess(userId)) return Forbid();
         var trade = await _portfolioService.ExecuteSellAsync(userId, request.Symbol, request.Shares);
         return Ok(ApiResponse<TradeDto>.Ok(ToDto(trade)));
     }
 
     private static TradeDto ToDto(Trade trade) =>
         new(trade.Id, trade.Symbol, trade.Type, trade.Quantity, trade.Price,
-            trade.TotalValue, trade.Reason, trade.Timestamp);
+            trade.TotalValue, trade.Commission, trade.Reason, trade.Timestamp);
 }

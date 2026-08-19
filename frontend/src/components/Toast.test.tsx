@@ -66,4 +66,30 @@ describe('ToastProvider', () => {
     fireEvent.click(screen.getByRole('button', { name: 'ok' }));
     expect(screen.getAllByRole('alert')).toHaveLength(2);
   });
+
+  it('keeps showError identity stable across renders (W2)', () => {
+    const captured: Array<(message: string) => void> = [];
+    function IdentityProbe() {
+      const { showError } = useToast();
+      captured.push(showError);
+      return <button onClick={() => showError('x')}>fail</button>;
+    }
+    const { rerender } = render(
+      <ToastProvider>
+        <IdentityProbe />
+      </ToastProvider>,
+    );
+
+    // Force a re-render (the toast state change path is covered behaviorally
+    // by Layout.test.tsx "does not refetch the portfolio total when a toast
+    // fires"); the context value must not be recreated.
+    rerender(
+      <ToastProvider>
+        <IdentityProbe />
+      </ToastProvider>,
+    );
+
+    expect(captured.length).toBe(2);
+    expect(captured[1]).toBe(captured[0]);
+  });
 });

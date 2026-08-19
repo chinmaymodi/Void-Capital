@@ -12,7 +12,7 @@ namespace VoidCapital.Api.Tests.Controllers;
 public class SignalsControllerTests
 {
     private readonly Mock<ISignalService> _signalService = new();
-    private SignalsController CreateController() => new(_signalService.Object);
+    private SignalsController CreateController() => new SignalsController(_signalService.Object).AsAdmin();
 
     private static SignalDto MakeDto(int id = 1, string status = "PENDING") => new(
         Id: id,

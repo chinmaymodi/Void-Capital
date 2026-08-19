@@ -1,5 +1,8 @@
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Moq;
+using Testcontainers.PostgreSql;
+using VoidCapital.Api.Data;
 using VoidCapital.Api.Modules.MarketData;
 using VoidCapital.Api.Modules.Portfolio;
 using VoidCapital.Api.Modules.Portfolio.Models;
@@ -9,8 +12,10 @@ using Xunit;
 
 namespace VoidCapital.Api.Tests.Services;
 
-public class PortfolioServiceTests
+public class PortfolioServiceTests : IAsyncLifetime
 {
+    private readonly PostgreSqlContainer _dbContainer = new PostgreSqlBuilder().Build();
+    private AppDbContext _dbContext = null!;
     private readonly Mock<IUserRepository> _userRepo = new();
     private readonly Mock<IHoldingRepository> _holdingRepo = new();
     private readonly Mock<ITradeRepository> _tradeRepo = new();
@@ -18,13 +23,36 @@ public class PortfolioServiceTests
     private readonly Mock<ISettingsRepository> _settingsRepo = new();
     private readonly Mock<IMarketDataService> _marketData = new();
 
-    private PortfolioService CreateService() => new(
-        _userRepo.Object,
-        _holdingRepo.Object,
-        _tradeRepo.Object,
-        _pnlRepo.Object,
-        _settingsRepo.Object,
-        _marketData.Object);
+    public async Task InitializeAsync()
+    {
+        await _dbContainer.StartAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseNpgsql(_dbContainer.GetConnectionString())
+            .Options;
+        _dbContext = new AppDbContext(options);
+        await _dbContext.Database.EnsureCreatedAsync();
+        
+        _userRepo.Setup(r => r.UpdateCashAtomicAsync(It.IsAny<int>(), It.IsAny<decimal>()))
+            .ReturnsAsync(1);
+    }
+
+    public async Task DisposeAsync() => await _dbContainer.DisposeAsync();
+
+    private PortfolioService CreateService()
+    {
+        var dbFactory = new Mock<IDbContextFactory<AppDbContext>>();
+        dbFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_dbContext);
+            
+        return new PortfolioService(
+            dbFactory.Object,
+            _userRepo.Object,
+            _holdingRepo.Object,
+            _tradeRepo.Object,
+            _pnlRepo.Object,
+            _settingsRepo.Object,
+            _marketData.Object);
+    }
 
     private static User MakeUser(decimal cash = 10000m) => new() { Id = 1, CurrentCash = cash };
 
@@ -134,9 +162,10 @@ public class PortfolioServiceTests
         trade.Quantity.Should().Be(10);
         trade.Price.Should().Be(500m);
         trade.TotalValue.Should().Be(5000m);
+        trade.Commission.Should().Be(6.55m); // 5000 * 0.0013093, rounded
 
-        // Cash deducted: 10000 - 5000 = 5000
-        _userRepo.Verify(r => r.UpdateCashAsync(1, 5000m), Times.Once);
+        // Cash deducted: 10000 - 5000 - 6.55 = 4993.45
+        _userRepo.Verify(r => r.UpdateCashAtomicAsync(1, -5006.55m), Times.Once);
         // New holding inserted
         _holdingRepo.Verify(r => r.AddAsync(It.Is<Holding>(h =>
             h.UserId == 1 && h.Symbol == "RELIANCE" && h.Quantity == 10 && h.AvgPrice == 500m)), Times.Once);
@@ -160,6 +189,7 @@ public class PortfolioServiceTests
         _holdingRepo.Verify(r => r.UpdateAsync(It.Is<Holding>(h =>
             h.Quantity == 20 && h.AvgPrice == 150m)), Times.Once);
         _holdingRepo.Verify(r => r.AddAsync(It.IsAny<Holding>()), Times.Never);
+        _userRepo.Verify(r => r.UpdateCashAtomicAsync(1, -2002.62m), Times.Once); // 2000 + 2.62 commission
         trade.TotalValue.Should().Be(2000m);
     }
 
@@ -223,7 +253,7 @@ public class PortfolioServiceTests
         var trade = await service.ExecuteBuyAsync(3, "RELIANCE", 10); // cost 5000 > cash 1000
 
         trade.Should().NotBeNull();
-        _userRepo.Verify(r => r.UpdateCashAsync(3, -4000m), Times.Once);
+        _userRepo.Verify(r => r.UpdateCashAtomicAsync(3, -5006.55m), Times.Once); // 5000 + 6.55 commission
     }
 
     // ---------- ExecuteSell ----------
@@ -242,9 +272,10 @@ public class PortfolioServiceTests
 
         trade.Type.Should().Be("SELL");
         trade.TotalValue.Should().Be(600m);
+        trade.Commission.Should().Be(0.70m); // 600 * 0.0011593, rounded
 
-        // Cash increased: 10000 + 600 = 10600
-        _userRepo.Verify(r => r.UpdateCashAsync(1, 10600m), Times.Once);
+        // Cash increased: 10000 + 600 - 0.70 = 10599.30
+        _userRepo.Verify(r => r.UpdateCashAtomicAsync(1, 599.30m), Times.Once);
         // Holding reduced: 10 - 3 = 7 (kept, not deleted)
         _holdingRepo.Verify(r => r.UpdateAsync(It.Is<Holding>(h => h.Quantity == 7)), Times.Once);
         _holdingRepo.Verify(r => r.DeleteAsync(It.IsAny<int>()), Times.Never);
@@ -328,8 +359,9 @@ public class PortfolioServiceTests
         trade.Type.Should().Be("SELL");
         trade.Price.Should().Be(50m);
         trade.TotalValue.Should().Be(500m);
-        // Cash increased: 10000 + 500 = 10500
-        _userRepo.Verify(r => r.UpdateCashAsync(1, 10500m), Times.Once);
+        trade.Commission.Should().Be(20.5m); // 500 * 0.001 STT + 20 flat
+        // Cash increased: 10000 + 500 - 20.5 = 10479.5
+        _userRepo.Verify(r => r.UpdateCashAsync(1, 10479.5m), Times.Once);
         // Selling all -> holding deleted
         _holdingRepo.Verify(r => r.DeleteAsync(holding.Id), Times.Once);
         _holdingRepo.Verify(r => r.UpdateAsync(It.IsAny<Holding>()), Times.Never);
@@ -359,8 +391,9 @@ public class PortfolioServiceTests
         trade.Type.Should().Be("SELL");
         trade.Price.Should().Be(0m);
         trade.TotalValue.Should().Be(0m);
-        // Cash unchanged: 10000 + 0 proceeds
-        _userRepo.Verify(r => r.UpdateCashAsync(1, 10000m), Times.Once);
+        trade.Commission.Should().Be(20m); // flat fee still applies on the write-off order
+        // Cash: 10000 + 0 proceeds - 20 flat fee = 9980
+        _userRepo.Verify(r => r.UpdateCashAsync(1, 9980m), Times.Once);
         _holdingRepo.Verify(r => r.DeleteAsync(holding.Id), Times.Once);
         _tradeRepo.Verify(r => r.AddAsync(It.IsAny<Trade>()), Times.Once);
     }
