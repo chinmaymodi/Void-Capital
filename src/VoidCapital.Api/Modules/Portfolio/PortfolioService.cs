@@ -267,7 +267,7 @@ public class PortfolioService : IPortfolioService
     }
 
     public async Task<Trade> ExecuteOptionsSellAsync(int userId, string symbol, string optType,
-        DateOnly expiry, decimal strike, int quantity)
+        DateOnly expiry, decimal strike, int quantity, string reason = "Options signal")
     {
         if (quantity <= 0)
             throw new ValidationException("Option quantity must be greater than zero.");
@@ -328,11 +328,36 @@ public class PortfolioService : IPortfolioService
             Price = price,
             TotalValue = proceeds,
             Commission = commission,
-            Reason = "Options signal",
+            Reason = reason,
             Timestamp = DateTime.UtcNow
         };
         await _tradeRepo.AddAsync(trade);
         return trade;
+    }
+
+    public async Task<int> SquareOffExpiredOptionsAsync(int userId, DateOnly today)
+    {
+        // D25: an option contract that expired is worthless going forward.
+        // Close it at the last observable settle (GetOptionPriceAsync returns
+        // the latest row for the contract regardless of date) instead of
+        // letting it decay to zero in the portfolio. Contracts with no settle
+        // row at all are written off at 0 by ExecuteOptionsSellAsync (F17).
+        var holdings = await _holdingRepo.GetByUserIdAsync(userId);
+        var expired = holdings
+            .Where(h => h.InstrumentType != "EQ"
+                        && h.Expiry is not null
+                        && h.Expiry.Value <= today)
+            .ToList();
+
+        foreach (var holding in expired)
+        {
+            await ExecuteOptionsSellAsync(
+                userId, holding.Symbol, holding.InstrumentType,
+                holding.Expiry!.Value, holding.Strike!.Value, holding.Quantity,
+                reason: "expiry");
+        }
+
+        return expired.Count;
     }
 
     public async Task RecordDailySnapshotAsync(int userId)

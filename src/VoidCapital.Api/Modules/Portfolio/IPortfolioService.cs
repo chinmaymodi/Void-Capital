@@ -24,7 +24,14 @@ public interface IPortfolioService
     /// The holding is located by the full contract key, not just the symbol.
     /// </summary>
     Task<Trade> ExecuteOptionsSellAsync(int userId, string symbol, string optType,
-        DateOnly expiry, decimal strike, int quantity);
+        DateOnly expiry, decimal strike, int quantity, string reason = "Options signal");
+
+    /// <summary>
+    /// Square off all option holdings whose contract has expired (Expiry &lt;= today)
+    /// at their last observable settle. Returns the number of positions closed.
+    /// D25: prevents expired contracts from decaying to zero in the portfolio.
+    /// </summary>
+    Task<int> SquareOffExpiredOptionsAsync(int userId, DateOnly today);
 
     Task RecordDailySnapshotAsync(int userId);
 

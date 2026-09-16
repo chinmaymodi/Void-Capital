@@ -8,4 +8,7 @@ public interface IPythonBridge
 
     /// <summary>Run the daily feature refresh (refresh_daily.py, D1 step 0).</summary>
     Task<PythonRunResult> RunDataRefreshAsync(CancellationToken ct = default);
+
+    /// <summary>Run the daily F&O bhavcopy ingestion (load_fo_bhavcopy.py, D29 step 0a).</summary>
+    Task<PythonRunResult> RunFoIngestionAsync(CancellationToken ct = default);
 }

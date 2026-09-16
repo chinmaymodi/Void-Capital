@@ -86,6 +86,9 @@ public class IntegrationFactory : WebApplicationFactory<Program>, IAsyncLifetime
 
         public Task<PythonRunResult> RunDataRefreshAsync(CancellationToken ct = default) =>
             Task.FromResult(new PythonRunResult(true, "", ""));
+
+        public Task<PythonRunResult> RunFoIngestionAsync(CancellationToken ct = default) =>
+            Task.FromResult(new PythonRunResult(true, "", ""));
     }
 }
 

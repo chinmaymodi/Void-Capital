@@ -52,4 +52,19 @@ public class PythonBridge : IPythonBridge
         var (exitCode, output, error) = await _runner.RunAsync(_settings.PythonPath, arguments, ct);
         return new PythonRunResult(exitCode == 0, output, error);
     }
+
+    public async Task<PythonRunResult> RunFoIngestionAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_settings.PythonPath) ||
+            string.IsNullOrWhiteSpace(_settings.FoBhavcopyScriptPath))
+        {
+            return new PythonRunResult(false, "", "Python bridge is not configured (Python:PythonPath / Python:FoBhavcopyScriptPath).");
+        }
+
+        // Daily mode: fetch the last 7 calendar days (IST). A bhavcopy not yet
+        // published at cycle time 404s silently and is caught up next run.
+        var arguments = $"\"{_settings.FoBhavcopyScriptPath}\" --days-back 7";
+        var (exitCode, output, error) = await _runner.RunAsync(_settings.PythonPath, arguments, ct);
+        return new PythonRunResult(exitCode == 0, output, error);
+    }
 }

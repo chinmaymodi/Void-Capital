@@ -13,7 +13,9 @@ public record DailyCycleRunResult(string Status, int UsersProcessed, int Signals
 
 /// <summary>
 /// Executes one full daily cycle (ticket D10.1):
+///   0a. Ingest daily F&O bhavcopy (D29: load_fo_bhavcopy.py -> fo_options)
 ///   0. Refresh daily features (D1: refresh_daily.py -> market_data.features)
+///   0b. Square off expired option holdings at last settle (D25)
 ///   1. Signal generation for every user (facade -> Python pipeline)
 ///   2. Auto-execute signals for users with AutoExecute (min-confidence gated)
 ///   3. Resolve pending signal performance (target/stop/expiry)
@@ -96,6 +98,30 @@ public class DailyCycleRunner : IDailyCycleRunner
 
         try
         {
+            // 0a. Ingest today's F&O bhavcopy (D29). Non-fatal: if the bhavcopy
+            // is not published yet (NSE publishes ~17:30-18:00 IST, cycle runs
+            // 18:00 IST) the script 404s silently and the next run catches up;
+            // features then compute on the freshest fo_options available.
+            try
+            {
+                var ingest = await _pythonBridge.RunFoIngestionAsync(ct);
+                if (ingest.Success)
+                {
+                    _logger.LogInformation("F&O bhavcopy ingestion completed");
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "F&O bhavcopy ingestion failed, continuing on existing fo_options: {Error}",
+                        ingest.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "F&O bhavcopy ingestion threw, continuing on existing fo_options");
+            }
+
             // 0. Refresh daily features (D1). Approved behavior: a failed
             // refresh logs and continues on yesterday's features -- the cycle
             // must not die because the IV computation was slow or the data
@@ -120,6 +146,35 @@ public class DailyCycleRunner : IDailyCycleRunner
                     "Feature refresh threw, continuing on yesterday's features");
             }
 
+            // 0b. Square off expired option holdings (D25). The cycle runs
+            // post-close at 12:30 UTC = 18:00 IST, so the IST calendar date is
+            // the trading date; any contract whose expiry has passed is closed
+            // at its last observable settle before new signals are generated
+            // and executed. Per-user isolation: one user's failure must not
+            // abort the cycle.
+            var istToday = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5.5));
+            var users = await _userRepo.GetAllAsync();
+            foreach (var user in users)
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    var closed = await _portfolioService.SquareOffExpiredOptionsAsync(user.Id, istToday);
+                    if (closed > 0)
+                    {
+                        _logger.LogInformation(
+                            "Squared off {Count} expired option position(s) for user {UserId}",
+                            closed, user.Id);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "Expiry square-off failed for user {UserId}, continuing",
+                        user.Id);
+                }
+            }
+
             // 1. Signal generation for every user
             var summary = await _signalIntegration.RunForAllUsersAsync(ct);
             run.UsersProcessed = summary.UsersProcessed;
@@ -127,7 +182,6 @@ public class DailyCycleRunner : IDailyCycleRunner
             // Real signal count written by the Python pipeline for today's IST
             // trading date (cycle runs post-close at 12:30 UTC = 18:30 IST, so
             // the UTC and IST calendar dates coincide).
-            var istToday = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5.5));
             run.SignalsGenerated = (await _signalRepo.GetAllSignalsOnDateAsync(istToday))?.Count() ?? 0;
 
             // 2. Auto-execute signals for auto-execute users, min-confidence gated.
@@ -164,8 +218,7 @@ public class DailyCycleRunner : IDailyCycleRunner
             // 3. Resolve pending signal performance
             await _performanceService.ResolvePendingSignalsAsync();
 
-            // 4-5. Interest + margin call for every user
-            var users = await _userRepo.GetAllAsync();
+            // 4-5. Interest + margin call for every user (users list reused from step 0b)
             foreach (var user in users)
             {
                 ct.ThrowIfCancellationRequested();

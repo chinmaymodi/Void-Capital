@@ -87,6 +87,9 @@ public class DailyCycleServiceTests
         _pythonBridge
             .Setup(b => b.RunDataRefreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PythonRunResult(true, "", ""));
+        _pythonBridge
+            .Setup(b => b.RunFoIngestionAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PythonRunResult(true, "", ""));
         // DS1: the lock is free by default so the cycle actually runs.
         _cycleLock
             .Setup(l => l.TryAcquireAsync(It.IsAny<CancellationToken>()))
@@ -273,6 +276,112 @@ public class DailyCycleServiceTests
         var result = await CreateRunner().RunAsync();
 
         Assert.Equal("SUCCEEDED", result.Status);
+    }
+
+    [Fact]
+    public async Task RunAsync_IngestsFoBhavcopy_BeforeFeatureRefresh()
+    {
+        SetupEmptyUsers();
+        _cycleRunRepo.Setup(r => r.AddAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+        _cycleRunRepo.Setup(r => r.UpdateAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+
+        // Re-setup with an explicit sequence: ingestion must run before refresh.
+        var seq = new MockSequence();
+        _pythonBridge.InSequence(seq)
+            .Setup(b => b.RunFoIngestionAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PythonRunResult(true, "", ""));
+        _pythonBridge.InSequence(seq)
+            .Setup(b => b.RunDataRefreshAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PythonRunResult(true, "", ""));
+
+        await CreateRunner().RunAsync();
+
+        _pythonBridge.Verify(b => b.RunFoIngestionAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _pythonBridge.Verify(b => b.RunDataRefreshAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_IngestionFailure_ContinuesCycle()
+    {
+        SetupEmptyUsers();
+        _pythonBridge
+            .Setup(b => b.RunFoIngestionAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PythonRunResult(false, "", "bhavcopy not published yet"));
+        _cycleRunRepo.Setup(r => r.AddAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+        _cycleRunRepo.Setup(r => r.UpdateAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+
+        var result = await CreateRunner().RunAsync();
+
+        // Approved D29 behavior: log-and-continue, the cycle still succeeds on
+        // existing fo_options data.
+        Assert.Equal("SUCCEEDED", result.Status);
+        _signalIntegration.Verify(s => s.RunForAllUsersAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_SquaresOffExpiredOptions_BeforeSignalGeneration()
+    {
+        // D25: expired option holdings are closed at their last settle before
+        // new signals are generated, so the cycle never trades a dead contract.
+        SetupEmptyUsers();
+        _userRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(new[]
+        {
+            new User { Id = 4, Name = "Options-Careful", CurrentCash = 100000m },
+            new User { Id = 5, Name = "Options-Reckless", CurrentCash = 100000m }
+        });
+        _portfolioService
+            .Setup(p => p.SquareOffExpiredOptionsAsync(It.IsAny<int>(), It.IsAny<DateOnly>()))
+            .ReturnsAsync(1);
+        _cycleRunRepo.Setup(r => r.AddAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+        _cycleRunRepo.Setup(r => r.UpdateAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+
+        // Explicit sequence: expiry square-off must run before signal generation.
+        var seq = new MockSequence();
+        _portfolioService.InSequence(seq)
+            .Setup(p => p.SquareOffExpiredOptionsAsync(4, It.IsAny<DateOnly>()))
+            .ReturnsAsync(1);
+        _portfolioService.InSequence(seq)
+            .Setup(p => p.SquareOffExpiredOptionsAsync(5, It.IsAny<DateOnly>()))
+            .ReturnsAsync(1);
+        _signalIntegration.InSequence(seq)
+            .Setup(s => s.RunForAllUsersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SignalRunSummary(2, 0, []));
+
+        await CreateRunner().RunAsync();
+
+        _portfolioService.Verify(p => p.SquareOffExpiredOptionsAsync(4, It.IsAny<DateOnly>()), Times.Once);
+        _portfolioService.Verify(p => p.SquareOffExpiredOptionsAsync(5, It.IsAny<DateOnly>()), Times.Once);
+        _signalIntegration.Verify(s => s.RunForAllUsersAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_ExpirySquareOffFailure_ContinuesCycle()
+    {
+        // D25: one user's expiry square-off failure must not abort the cycle
+        // for the remaining users (same isolation as every other per-user step).
+        SetupEmptyUsers();
+        _userRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(new[]
+        {
+            new User { Id = 4, Name = "Options-Careful", CurrentCash = 100000m },
+            new User { Id = 5, Name = "Options-Reckless", CurrentCash = 100000m }
+        });
+        _portfolioService
+            .Setup(p => p.SquareOffExpiredOptionsAsync(4, It.IsAny<DateOnly>()))
+            .ThrowsAsync(new InvalidOperationException("settle lookup failed"));
+        _portfolioService
+            .Setup(p => p.SquareOffExpiredOptionsAsync(5, It.IsAny<DateOnly>()))
+            .ReturnsAsync(0);
+        _cycleRunRepo.Setup(r => r.AddAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+        _cycleRunRepo.Setup(r => r.UpdateAsync(It.IsAny<CycleRun>())).ReturnsAsync((CycleRun r) => r);
+
+        var result = await CreateRunner().RunAsync();
+
+        // Both users were attempted; the failing one did not abort the second
+        // or the rest of the cycle.
+        _portfolioService.Verify(p => p.SquareOffExpiredOptionsAsync(4, It.IsAny<DateOnly>()), Times.Once);
+        _portfolioService.Verify(p => p.SquareOffExpiredOptionsAsync(5, It.IsAny<DateOnly>()), Times.Once);
+        Assert.Equal("SUCCEEDED", result.Status);
+        _signalIntegration.Verify(s => s.RunForAllUsersAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
