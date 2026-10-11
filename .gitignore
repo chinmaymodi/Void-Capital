@@ -6,6 +6,9 @@ obj/
 *.userosscache
 *.sln.docstates
 
+## Test artifacts
+TestResults/
+
 ## Node / React
 node_modules/
 dist/
