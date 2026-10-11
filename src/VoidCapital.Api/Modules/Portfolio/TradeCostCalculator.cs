@@ -10,15 +10,17 @@ namespace VoidCapital.Api.Modules.Portfolio;
 public static class TradeCostCalculator
 {
     // NSE delivery-equity cost components (fractions of trade value).
-    public const decimal EquitySttRate = 0.001m;       // 0.1% both sides
-    public const decimal TurnoverRate = 0.0001m;       // 0.01% both sides
-    public const decimal ExchangeRate = 0.000035m;     // ~0.0035% both sides
-    public const decimal GstRate = 0.18m;              // 18% on fees
-    public const decimal StampDutyBuyRate = 0.00015m;  // 0.015%, buys only
+    // static readonly (not const): const declarations are compile-time
+    // inlined, so coverlet can never count the declaration lines as hit.
+    public static readonly decimal EquitySttRate = 0.001m;       // 0.1% both sides
+    public static readonly decimal TurnoverRate = 0.0001m;       // 0.01% both sides
+    public static readonly decimal ExchangeRate = 0.000035m;     // ~0.0035% both sides
+    public static readonly decimal GstRate = 0.18m;              // 18% on fees
+    public static readonly decimal StampDutyBuyRate = 0.00015m;  // 0.015%, buys only
 
     // Options (fills model): STT on sell premium + flat fee per order.
-    public const decimal OptionsSellSttRate = 0.001m;
-    public const decimal OptionsFlatFee = 20m;
+    public static readonly decimal OptionsSellSttRate = 0.001m;
+    public static readonly decimal OptionsFlatFee = 20m;
 
     /// <summary>
     /// Total commission for an equity trade. <paramref name="side"/> is
