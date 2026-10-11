@@ -460,4 +460,227 @@ public class PortfolioServiceTests : IAsyncLifetime
             p.HoldingsValue == 0m &&
             p.PortfolioValue == 4000m)), Times.Once);
     }
+
+    // ---------- ExecuteOptionsBuy ----------
+
+    [Fact]
+    public async Task ExecuteOptionsBuy_DeductsPremium_AndCreatesOptionHolding()
+    {
+        var user = MakeUser(cash: 10000m);
+        _userRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(user);
+        _settingsRepo.Setup(s => s.GetByUserIdAsync(1)).ReturnsAsync((UserSettings?)null);
+        _holdingRepo.Setup(r => r.GetByInstrumentAsync(1, "CE", "RELIANCE",
+            new DateOnly(2026, 10, 29), 2800m)).ReturnsAsync((Holding?)null);
+
+        var service = CreateService();
+        var trade = await service.ExecuteOptionsBuyAsync(
+            1, "reliance", "ce", new DateOnly(2026, 10, 29), 2800m, 75, 45m);
+
+        trade.Type.Should().Be("BUY");
+        trade.InstrumentType.Should().Be("CE");
+        trade.Symbol.Should().Be("RELIANCE");
+        trade.Price.Should().Be(45m);
+        trade.TotalValue.Should().Be(3375m); // 45 * 75
+        trade.Commission.Should().Be(20m);   // flat fee on buy
+        // Cash: 10000 - 3375 - 20 = 6605
+        _userRepo.Verify(r => r.UpdateCashAsync(1, 6605m), Times.Once);
+        _holdingRepo.Verify(r => r.AddAsync(It.Is<Holding>(h =>
+            h.InstrumentType == "CE" && h.Symbol == "RELIANCE" &&
+            h.Expiry == new DateOnly(2026, 10, 29) && h.Strike == 2800m &&
+            h.Quantity == 75 && h.AvgPrice == 45m)), Times.Once);
+        _tradeRepo.Verify(r => r.AddAsync(It.IsAny<Trade>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ExecuteOptionsBuy_WhenPremiumZero_ThrowsValidation()
+    {
+        _userRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(MakeUser());
+
+        var service = CreateService();
+        var act = () => service.ExecuteOptionsBuyAsync(
+            1, "RELIANCE", "CE", new DateOnly(2026, 10, 29), 2800m, 75, 0m);
+
+        await act.Should().ThrowAsync<ValidationException>()
+            .WithMessage("*premium*");
+        _userRepo.Verify(r => r.UpdateCashAsync(It.IsAny<int>(), It.IsAny<decimal>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteOptionsBuy_WhenInsufficientFunds_Throws()
+    {
+        var user = MakeUser(cash: 1000m);
+        _userRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(user);
+        _settingsRepo.Setup(s => s.GetByUserIdAsync(1)).ReturnsAsync((UserSettings?)null);
+
+        var service = CreateService();
+        // cost 3375 + 20 commission > cash 1000
+        var act = () => service.ExecuteOptionsBuyAsync(
+            1, "RELIANCE", "CE", new DateOnly(2026, 10, 29), 2800m, 75, 45m);
+
+        await act.Should().ThrowAsync<InsufficientFundsException>();
+        _holdingRepo.Verify(r => r.AddAsync(It.IsAny<Holding>()), Times.Never);
+    }
+
+    // ---------- SquareOffExpiredOptions ----------
+
+    [Fact]
+    public async Task SquareOffExpiredOptions_SellsOnlyExpiredContracts()
+    {
+        var user = MakeUser(cash: 10000m);
+        _userRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(user);
+        var expired = MakeOptionHolding(); // expiry 2026-08-25
+        var live = MakeOptionHolding();
+        live.Id = 2;
+        live.Expiry = new DateOnly(2026, 12, 25);
+        _holdingRepo.Setup(r => r.GetByUserIdAsync(1)).ReturnsAsync(new[] { expired, live });
+        _holdingRepo.Setup(r => r.GetByInstrumentAsync(1, "CE", "RELIANCE",
+            new DateOnly(2026, 8, 25), 2500m)).ReturnsAsync(expired);
+        _marketData.Setup(m => m.GetOptionPriceAsync("RELIANCE",
+            new DateOnly(2026, 8, 25), 2500m, "CE")).ReturnsAsync(50m);
+
+        var service = CreateService();
+        var closed = await service.SquareOffExpiredOptionsAsync(1, new DateOnly(2026, 9, 1));
+
+        closed.Should().Be(1);
+        _holdingRepo.Verify(r => r.DeleteAsync(expired.Id), Times.Once);
+        _holdingRepo.Verify(r => r.DeleteAsync(live.Id), Times.Never);
+        _tradeRepo.Verify(r => r.AddAsync(It.Is<Trade>(t => t.Reason == "expiry")), Times.Once);
+    }
+
+    [Fact]
+    public async Task SquareOffExpiredOptions_NoExpiredContracts_ReturnsZero()
+    {
+        _holdingRepo.Setup(r => r.GetByUserIdAsync(1)).ReturnsAsync(Array.Empty<Holding>());
+
+        var service = CreateService();
+        var closed = await service.SquareOffExpiredOptionsAsync(1, new DateOnly(2026, 9, 1));
+
+        closed.Should().Be(0);
+        _tradeRepo.Verify(r => r.AddAsync(It.IsAny<Trade>()), Times.Never);
+    }
+
+    // ---------- GetPnlHistory ----------
+
+    [Fact]
+    public async Task GetPnlHistory_ReturnsSnapshotsForUser()
+    {
+        _userRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(MakeUser());
+        var snapshots = new[]
+        {
+            new PnlSnapshot { Id = 1, UserId = 1, Date = new DateOnly(2026, 9, 1), PortfolioValue = 1000m }
+        };
+        _pnlRepo.Setup(r => r.GetByUserIdAsync(1)).ReturnsAsync(snapshots);
+
+        var service = CreateService();
+        var history = await service.GetPnlHistoryAsync(1);
+
+        history.Should().HaveCount(1);
+        _pnlRepo.Verify(r => r.GetByUserIdAsync(1), Times.Once);
+    }
+
+    // ---------- Options pricing in holdings ----------
+
+    [Fact]
+    public async Task GetHoldings_OptionsHolding_PricesByContractSettle()
+    {
+        var user = MakeUser(cash: 4000m);
+        _userRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(user);
+        var optionHolding = MakeOptionHolding(quantity: 10); // avg 5, expiry 2026-08-25, strike 2500
+        _holdingRepo.Setup(r => r.GetByUserIdAsync(1)).ReturnsAsync(new[] { optionHolding });
+        _marketData.Setup(m => m.GetOptionPriceAsync("RELIANCE",
+            new DateOnly(2026, 8, 25), 2500m, "CE")).ReturnsAsync(50m);
+
+        var service = CreateService();
+        var holdings = (await service.GetHoldingsAsync(1)).ToList();
+
+        holdings.Should().HaveCount(1);
+        holdings[0].CurrentPrice.Should().Be(50m);
+        holdings[0].UnrealizedPnl.Should().Be(450m); // (50 - 5) * 10
+    }
+
+    [Fact]
+    public async Task GetHoldings_OptionsHolding_NoSettle_WorthZero()
+    {
+        var user = MakeUser(cash: 4000m);
+        _userRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(user);
+        var optionHolding = MakeOptionHolding(quantity: 10);
+        _holdingRepo.Setup(r => r.GetByUserIdAsync(1)).ReturnsAsync(new[] { optionHolding });
+        _marketData.Setup(m => m.GetOptionPriceAsync("RELIANCE",
+            new DateOnly(2026, 8, 25), 2500m, "CE"))
+            .ThrowsAsync(new NotFoundException("No option data"));
+
+        var service = CreateService();
+        var holdings = (await service.GetHoldingsAsync(1)).ToList();
+
+        holdings[0].CurrentPrice.Should().Be(0m);
+        holdings[0].UnrealizedPnl.Should().Be(-50m); // (0 - 5) * 10
+    }
+
+    // ---------- Price guards ----------
+
+    [Fact]
+    public async Task ExecuteBuy_WhenPriceZero_ThrowsValidation()
+    {
+        _userRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(MakeUser());
+        _marketData.Setup(m => m.GetCurrentPriceAsync("RELIANCE")).ReturnsAsync(0m);
+
+        var service = CreateService();
+        var act = () => service.ExecuteBuyAsync(1, "RELIANCE", 10);
+
+        await act.Should().ThrowAsync<ValidationException>()
+            .WithMessage("*Price not found*");
+    }
+
+    [Fact]
+    public async Task ExecuteSell_WhenPriceZero_ThrowsValidation()
+    {
+        var user = MakeUser(cash: 10000m);
+        _userRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(user);
+        _holdingRepo.Setup(r => r.GetAsync(1, "RELIANCE")).ReturnsAsync(MakeHolding());
+        _marketData.Setup(m => m.GetCurrentPriceAsync("RELIANCE")).ReturnsAsync(0m);
+
+        var service = CreateService();
+        var act = () => service.ExecuteSellAsync(1, "RELIANCE", 3);
+
+        await act.Should().ThrowAsync<ValidationException>()
+            .WithMessage("*Price not found*");
+        _userRepo.Verify(r => r.UpdateCashAsync(It.IsAny<int>(), It.IsAny<decimal>()), Times.Never);
+    }
+
+    // ---------- Options sell edge paths ----------
+
+    [Fact]
+    public async Task ExecuteOptionsSell_WhenNoHolding_ThrowsValidation()
+    {
+        _userRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(MakeUser());
+        _holdingRepo.Setup(r => r.GetByInstrumentAsync(1, "CE", "RELIANCE",
+            new DateOnly(2026, 10, 29), 2800m)).ReturnsAsync((Holding?)null);
+
+        var service = CreateService();
+        var act = () => service.ExecuteOptionsSellAsync(
+            1, "RELIANCE", "CE", new DateOnly(2026, 10, 29), 2800m, 75);
+
+        await act.Should().ThrowAsync<ValidationException>()
+            .WithMessage("*No holding*");
+    }
+
+    [Fact]
+    public async Task ExecuteOptionsSell_PartialSell_UpdatesHolding()
+    {
+        var user = MakeUser(cash: 10000m);
+        var holding = MakeOptionHolding(quantity: 10);
+        _userRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(user);
+        _holdingRepo.Setup(r => r.GetByInstrumentAsync(1, "CE", "RELIANCE",
+            holding.Expiry!.Value, holding.Strike!.Value)).ReturnsAsync(holding);
+        _marketData.Setup(m => m.GetOptionPriceAsync("RELIANCE",
+            holding.Expiry!.Value, holding.Strike!.Value, "CE")).ReturnsAsync(50m);
+
+        var service = CreateService();
+        var trade = await service.ExecuteOptionsSellAsync(
+            1, "RELIANCE", "CE", holding.Expiry!.Value, holding.Strike!.Value, 4);
+
+        trade.Quantity.Should().Be(4);
+        _holdingRepo.Verify(r => r.UpdateAsync(It.Is<Holding>(h => h.Quantity == 6)), Times.Once);
+        _holdingRepo.Verify(r => r.DeleteAsync(It.IsAny<int>()), Times.Never);
+    }
 }

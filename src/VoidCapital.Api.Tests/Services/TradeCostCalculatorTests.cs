@@ -61,4 +61,18 @@ public class TradeCostCalculatorTests
         // V=0 write-off still pays the flat fee.
         TradeCostCalculator.OptionsCost(0m, "SELL").Should().Be(20m);
     }
+
+    [Fact]
+    public void RateConstants_MatchCommissionModel()
+    {
+        // Pin the raw constants so a silent rate change cannot slip through
+        // without a deliberate test update (mirrors python/commission.py).
+        TradeCostCalculator.EquitySttRate.Should().Be(0.001m);
+        TradeCostCalculator.TurnoverRate.Should().Be(0.0001m);
+        TradeCostCalculator.ExchangeRate.Should().Be(0.000035m);
+        TradeCostCalculator.GstRate.Should().Be(0.18m);
+        TradeCostCalculator.StampDutyBuyRate.Should().Be(0.00015m);
+        TradeCostCalculator.OptionsSellSttRate.Should().Be(0.001m);
+        TradeCostCalculator.OptionsFlatFee.Should().Be(20m);
+    }
 }

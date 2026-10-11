@@ -23,4 +23,21 @@ public static class ControllerTestAuth
         };
         return controller;
     }
+
+    /// <summary>
+    /// Attaches a non-admin principal with the given user id (NameIdentifier)
+    /// so per-user CanAccess checks can be exercised both ways.
+    /// </summary>
+    public static T AsUser<T>(this T controller, int userId) where T : ControllerBase
+    {
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity(
+                    new[] { new Claim(ClaimTypes.NameIdentifier, userId.ToString()) }, "test")),
+            },
+        };
+        return controller;
+    }
 }

@@ -252,4 +252,191 @@ public class SignalServiceTests
 
         await act.Should().ThrowAsync<ValidationException>();
     }
+
+    [Fact]
+    public async Task ExecuteApprovedSignal_WhenMissing_ThrowsNotFound()
+    {
+        var service = CreateService();
+        var act = () => service.ExecuteApprovedSignalAsync(99);
+
+        await act.Should().ThrowAsync<NotFoundException>();
+    }
+
+    // ---------- Batch reject ----------
+
+    [Fact]
+    public async Task BatchReject_ProcessesEachSignal()
+    {
+        var signal1 = MakePendingSignal();
+        signal1.Id = 1;
+        var signal2 = MakePendingSignal();
+        signal2.Id = 2;
+        GivenSignal(signal1);
+        GivenSignal(signal2);
+
+        var results = await CreateService().BatchRejectAsync([1, 2]);
+
+        results.Should().HaveCount(2);
+        results.Should().OnlyContain(r => r.Success);
+        _signalRepo.Verify(r => r.UpdateAsync(It.IsAny<Signal>()), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task BatchReject_WhenOneFails_ReturnsPerItemResults()
+    {
+        var signal1 = MakePendingSignal();
+        signal1.Id = 1;
+        var processed = MakePendingSignal();
+        processed.Id = 2;
+        processed.Status = SignalStatus.REJECTED;
+        GivenSignal(signal1);
+        GivenSignal(processed);
+
+        var results = await CreateService().BatchRejectAsync([1, 2]);
+
+        results.Should().HaveCount(2);
+        results.Should().Contain(r => r.Id == 1 && r.Success);
+        results.Should().Contain(r => r.Id == 2 && !r.Success && r.Error != null);
+    }
+
+    // ---------- TryExecute: price guards ----------
+
+    [Fact]
+    public async Task ApproveSignal_WhenPriceZeroOrNegative_MarksFailed()
+    {
+        var signal = MakePendingSignal(action: "BUY", quantity: 10);
+        GivenSignal(signal);
+        GivenSettings(autoExecute: true);
+        GivenPrice(0m);
+
+        await CreateService().ApproveSignalAsync(signal.Id);
+
+        signal.Status.Should().Be(SignalStatus.FAILED);
+        signal.FailureReason.Should().Contain("Price not found");
+        _portfolioService.Verify(p => p.ExecuteBuyAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<int>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ApproveSignal_WhenPriceDeviationExceedsBand_MarksFailed()
+    {
+        var signal = MakePendingSignal(action: "BUY", quantity: 10);
+        signal.Performance = new SignalPerformance
+        {
+            EntryPrice = 500m,
+            Outcome = "PENDING",
+            EvaluationDays = 5,
+            CreatedAt = DateTime.UtcNow
+        };
+        GivenSignal(signal);
+        GivenSettings(autoExecute: true);
+        GivenPrice(600m); // 20% above entry -> outside the 10% sanity band
+
+        await CreateService().ApproveSignalAsync(signal.Id);
+
+        signal.Status.Should().Be(SignalStatus.FAILED);
+        signal.FailureReason.Should().Contain("Price deviation");
+        _portfolioService.Verify(p => p.ExecuteBuyAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<int>()), Times.Never);
+    }
+
+    // ---------- TryExecute: options paths ----------
+
+    private static Signal MakePendingOptionsSignal(string action, decimal? premium = null) => new()
+    {
+        Id = 1,
+        UserId = 1,
+        Symbol = "RELIANCE",
+        InstrumentType = "CE",
+        Expiry = new DateOnly(2026, 10, 29),
+        Strike = 2800m,
+        Action = action,
+        SuggestedQuantity = 75,
+        Status = SignalStatus.PENDING,
+        Date = DateOnly.FromDateTime(DateTime.UtcNow),
+        Performance = premium is null ? null : new SignalPerformance
+        {
+            EntryPrice = premium.Value,
+            Outcome = "PENDING",
+            EvaluationDays = 5,
+            CreatedAt = DateTime.UtcNow
+        }
+    };
+
+    [Fact]
+    public async Task ApproveSignal_OptionsBuy_CallsExecuteOptionsBuy()
+    {
+        var signal = MakePendingOptionsSignal("BUY", premium: 45m);
+        GivenSignal(signal);
+        GivenSettings(autoExecute: true);
+        GivenPrice(45m); // market price == premium so the F11 band check passes
+
+        await CreateService().ApproveSignalAsync(signal.Id);
+
+        _portfolioService.Verify(p => p.ExecuteOptionsBuyAsync(
+            1, "RELIANCE", "CE", new DateOnly(2026, 10, 29), 2800m, 75, 45m), Times.Once);
+        signal.Status.Should().Be(SignalStatus.EXECUTED);
+    }
+
+    [Fact]
+    public async Task ApproveSignal_OptionsBuy_MissingPremium_MarksFailed()
+    {
+        var signal = MakePendingOptionsSignal("BUY", premium: null);
+        GivenSignal(signal);
+        GivenSettings(autoExecute: true);
+        GivenPrice(45m);
+
+        await CreateService().ApproveSignalAsync(signal.Id);
+
+        signal.Status.Should().Be(SignalStatus.FAILED);
+        signal.FailureReason.Should().Contain("no entry premium");
+        _portfolioService.Verify(p => p.ExecuteOptionsBuyAsync(
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<DateOnly>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<decimal>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ApproveSignal_OptionsSell_CallsExecuteOptionsSell()
+    {
+        var signal = MakePendingOptionsSignal("SELL", premium: 45m);
+        GivenSignal(signal);
+        GivenSettings(autoExecute: true);
+        GivenPrice(45m);
+
+        await CreateService().ApproveSignalAsync(signal.Id);
+
+        _portfolioService.Verify(p => p.ExecuteOptionsSellAsync(
+            1, "RELIANCE", "CE", new DateOnly(2026, 10, 29), 2800m, 75, It.IsAny<string>()), Times.Once);
+        signal.Status.Should().Be(SignalStatus.EXECUTED);
+    }
+
+    [Fact]
+    public async Task ApproveSignal_OptionsMissingExpiryOrStrike_MarksFailed()
+    {
+        var signal = MakePendingOptionsSignal("BUY", premium: 45m);
+        signal.Expiry = null;
+        GivenSignal(signal);
+        GivenSettings(autoExecute: true);
+        GivenPrice(45m);
+
+        await CreateService().ApproveSignalAsync(signal.Id);
+
+        signal.Status.Should().Be(SignalStatus.FAILED);
+        signal.FailureReason.Should().Contain("missing expiry or strike");
+    }
+
+    // ---------- TryExecute: unknown action ----------
+
+    [Fact]
+    public async Task ApproveSignal_UnknownAction_MarksFailed()
+    {
+        var signal = MakePendingSignal(action: "HOLD", quantity: 10);
+        GivenSignal(signal);
+        GivenSettings(autoExecute: true);
+        GivenPrice();
+
+        await CreateService().ApproveSignalAsync(signal.Id);
+
+        signal.Status.Should().Be(SignalStatus.FAILED);
+        signal.FailureReason.Should().Contain("Unknown signal action");
+        _portfolioService.Verify(p => p.ExecuteBuyAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<int>()), Times.Never);
+    }
 }

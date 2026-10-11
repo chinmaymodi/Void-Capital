@@ -1,3 +1,5 @@
+using System.Reflection;
+using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -65,6 +67,21 @@ public class DailyCycleServiceTests
         var scopeProvider = new Mock<IServiceProvider>();
         scopeProvider.Setup(p => p.GetService(typeof(ICycleRunRepository))).Returns(_cycleRunRepo.Object);
         scopeProvider.Setup(p => p.GetService(typeof(IDailyCycleRunner))).Returns(CreateRunner());
+        var scope = new Mock<IServiceScope>();
+        scope.Setup(s => s.ServiceProvider).Returns(scopeProvider.Object);
+        var scopeFactory = new Mock<IServiceScopeFactory>();
+        scopeFactory.Setup(f => f.CreateScope()).Returns(scope.Object);
+        var rootProvider = new Mock<IServiceProvider>();
+        rootProvider.Setup(p => p.GetService(typeof(IServiceScopeFactory))).Returns(scopeFactory.Object);
+        return new DailyCycleService(rootProvider.Object, NullLogger<DailyCycleService>.Instance);
+    }
+
+    /// <summary>Same as <see cref="CreateService"/> but with a stubbed runner.</summary>
+    private DailyCycleService CreateService(IDailyCycleRunner runner)
+    {
+        var scopeProvider = new Mock<IServiceProvider>();
+        scopeProvider.Setup(p => p.GetService(typeof(ICycleRunRepository))).Returns(_cycleRunRepo.Object);
+        scopeProvider.Setup(p => p.GetService(typeof(IDailyCycleRunner))).Returns(runner);
         var scope = new Mock<IServiceScope>();
         scope.Setup(s => s.ServiceProvider).Returns(scopeProvider.Object);
         var scopeFactory = new Mock<IServiceScopeFactory>();
@@ -728,5 +745,69 @@ public class DailyCycleServiceTests
                 throw new TimeoutException("Background service did not reach the expected state in time.");
             await Task.Delay(10);
         }
+    }
+
+    // ---------- RunCycleAsync exception paths (private, via reflection) ----------
+
+    private static async Task<string?> InvokeRunCycleAsync(DailyCycleService service, CancellationToken token)
+    {
+        var method = typeof(DailyCycleService).GetMethod(
+            "RunCycleAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var task = (Task<string?>)method.Invoke(service, new object[] { token })!;
+        return await task;
+    }
+
+    private static async Task InvokeRunCatchUpAsync(DailyCycleService service, CancellationToken token)
+    {
+        var method = typeof(DailyCycleService).GetMethod(
+            "RunCatchUpIfMissedAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var task = (Task)method.Invoke(service, new object[] { token })!;
+        await task;
+    }
+
+    [Fact]
+    public async Task RunCycleAsync_RunnerThrows_ReturnsFailed()
+    {
+        // A crash before the runner records a run row is a failure: the slot
+        // was never served, so the caller may re-fire.
+        var runner = new Mock<IDailyCycleRunner>();
+        runner.Setup(r => r.RunAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("boom"));
+        var service = CreateService(runner.Object);
+
+        var result = await InvokeRunCycleAsync(service, CancellationToken.None);
+
+        result.Should().Be("FAILED");
+    }
+
+    [Fact]
+    public async Task RunCycleAsync_CancelledDuringRun_ReturnsNull()
+    {
+        // Shutdown cancellation is not a failure: no re-fire, no FAILED status.
+        var runner = new Mock<IDailyCycleRunner>();
+        runner.Setup(r => r.RunAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException());
+        var service = CreateService(runner.Object);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var result = await InvokeRunCycleAsync(service, cts.Token);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RunCatchUpIfMissed_CatchUpCheckThrows_FallsBackToSchedule()
+    {
+        // DB unreachable or migrations not applied: the catch-up check must
+        // not crash the host; the service falls back to the plain schedule.
+        _cycleRunRepo.Setup(r => r.GetRecentAsync(1))
+            .ThrowsAsync(new InvalidOperationException("db down"));
+        var service = CreateService();
+
+        await InvokeRunCatchUpAsync(service, CancellationToken.None);
+
+        // No exception propagated, and no catch-up run was attempted.
+        _cycleRunRepo.Verify(r => r.AddAsync(It.IsAny<CycleRun>()), Times.Never);
     }
 }
